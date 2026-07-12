@@ -2,6 +2,9 @@
 
 Game action-exploration 3D open-zone di Mars yang langsung berjalan di browser. Pemain mengendalikan NIX, menyerap Xenite, mengaktifkan tiga menara dalam urutan bebas, melumpuhkan drone penjaga, lalu kembali ke portal.
 
+**Mainkan:** https://mars-xenowake-open-world.vercel.app  
+**Repository:** https://github.com/baristaahmadmuhtar-creator/mars-xenowake-open-world
+
 PRD lengkap ada di [`docs/PRD.md`](docs/PRD.md), sedangkan matriks pengujian mobile ada di [`docs/MOBILE_QA.md`](docs/MOBILE_QA.md).
 
 ## Release 1.1
