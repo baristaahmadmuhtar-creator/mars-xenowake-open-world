@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { AssetLibrary, type AssetName } from './AssetLibrary';
 import AudioEngine from './AudioEngine';
 import { InputController } from './InputController';
 import type { Quality } from './storage';
@@ -87,19 +88,24 @@ interface Beacon {
   coreMaterial: THREE.MeshStandardMaterial;
   beamMaterial: THREE.MeshBasicMaterial;
   haloMaterial: THREE.MeshBasicMaterial;
+  fallback: THREE.Group;
   active: boolean;
 }
 
 interface Xenite {
   group: THREE.Group;
+  fallback: THREE.Group;
   baseY: number;
   collected: boolean;
 }
 
 interface Drone {
   group: THREE.Group;
+  fallback: THREE.Group;
   home: THREE.Vector3;
   coreMaterial: THREE.MeshStandardMaterial;
+  kind: 'guardian' | 'crawler';
+  hoverHeight: number;
   orbit: number;
   stunned: number;
   attackCooldown: number;
@@ -109,6 +115,7 @@ interface Drone {
 
 interface Portal {
   group: THREE.Group;
+  fallback: THREE.Group;
   ring: THREE.Mesh;
   ringMaterial: THREE.MeshStandardMaterial;
   disc: THREE.Mesh;
@@ -159,12 +166,22 @@ export class XenowakeGame {
   private readonly input: InputController;
   private readonly audio: AudioEngine;
   private readonly renderer: THREE.WebGLRenderer | null;
+  private readonly assets = new AssetLibrary();
   private readonly player = new THREE.Group();
+  private readonly playerFallback = new THREE.Group();
+  private playerVisual: THREE.Group | null = null;
   private readonly playerMaterials: THREE.MeshStandardMaterial[] = [];
   private readonly playerLimbs: THREE.Object3D[] = [];
   private readonly beacons: Beacon[] = [];
   private readonly xenites: Xenite[] = [];
   private readonly drones: Drone[] = [];
+  private readonly npc = new THREE.Group();
+  private readonly npcFallback = new THREE.Group();
+  private npcVisual: THREE.Group | null = null;
+  private readonly crashSite = new THREE.Group();
+  private readonly crashFallback = new THREE.Group();
+  private readonly outpost = new THREE.Group();
+  private readonly outpostFallback = new THREE.Group();
   private dust: THREE.Points | null = null;
   private readonly velocity = new THREE.Vector3();
   private readonly movement = new THREE.Vector3();
@@ -212,7 +229,7 @@ export class XenowakeGame {
   private respawnTimer = 0;
   private boundaryToastCooldown = 0;
   private contextLost = false;
-  private currentInteraction: Beacon | 'portal' | null = null;
+  private currentInteraction: Beacon | 'portal' | 'npc' | null = null;
   private lastInteractionLabel = '';
 
   public constructor(
@@ -283,6 +300,7 @@ export class XenowakeGame {
       this.setQuality(quality);
       this.resize();
       this.resetSession();
+      void this.loadDetailedAssets();
 
       window.addEventListener('resize', this.handleResize, { passive: true });
       window.visualViewport?.addEventListener('resize', this.handleResize, { passive: true });
@@ -385,6 +403,7 @@ export class XenowakeGame {
     this.createRocks();
     this.createDecorativeCrystals();
     this.createCrashSite();
+    this.createOutpostAndNpc();
     this.createBeacons();
     this.createXenites();
     this.createDrones();
@@ -572,19 +591,19 @@ export class XenowakeGame {
   }
 
   private createCrashSite(): void {
-    const group = new THREE.Group();
     const crashX = -11;
     const crashZ = 1;
     const groundY = terrainHeight(crashX, crashZ);
-    group.position.set(crashX, groundY, crashZ);
-    group.scale.setScalar(0.82);
+    this.crashSite.position.set(crashX, groundY, crashZ);
+    this.crashSite.scale.setScalar(0.82);
+    this.crashSite.add(this.crashFallback);
 
     const dark = new THREE.MeshStandardMaterial({ color: 0x19151b, roughness: 0.7, metalness: 0.7 });
     const hull = new THREE.Mesh(new THREE.ConeGeometry(2.4, 10, 5), dark);
     hull.rotation.z = Math.PI / 2;
     hull.rotation.y = -0.25;
     hull.position.set(-5.5, 1.8, 2.7);
-    group.add(hull);
+    this.crashFallback.add(hull);
     const wingGeometry = new THREE.BufferGeometry();
     wingGeometry.setAttribute(
       'position',
@@ -593,15 +612,15 @@ export class XenowakeGame {
     wingGeometry.computeVertexNormals();
     const wing = new THREE.Mesh(wingGeometry, dark);
     wing.position.set(-3, 1.1, 1.5);
-    group.add(wing);
+    this.crashFallback.add(wing);
 
     const emberMaterial = new THREE.MeshBasicMaterial({ color: 0xff7b32 });
     for (let index = 0; index < 4; index += 1) {
       const ember = new THREE.Mesh(new THREE.SphereGeometry(0.12 + index * 0.03, 6, 4), emberMaterial);
       ember.position.set(-8 + index * 0.6, 0.8 + index * 0.25, 2.3 - index * 0.35);
-      group.add(ember);
+      this.crashFallback.add(ember);
     }
-    group.traverse((object) => {
+    this.crashFallback.traverse((object) => {
       if (object instanceof THREE.Mesh) {
         object.castShadow = true;
         object.receiveShadow = true;
@@ -609,8 +628,46 @@ export class XenowakeGame {
     });
     this.portal.ring.castShadow = true;
     this.portal.ring.receiveShadow = true;
-    this.scene.add(group);
+    this.scene.add(this.crashSite);
     this.scene.add(this.portal.group);
+  }
+
+  private createOutpostAndNpc(): void {
+    const outpostX = 19;
+    const outpostZ = 13;
+    this.outpost.position.set(outpostX, terrainHeight(outpostX, outpostZ), outpostZ);
+    this.outpost.rotation.y = -0.38;
+    const outpostBody = new THREE.Mesh(
+      new THREE.CylinderGeometry(4.2, 4.8, 3.1, 8),
+      new THREE.MeshStandardMaterial({ color: 0x6b6255, roughness: 0.78, metalness: 0.28, flatShading: true }),
+    );
+    outpostBody.position.y = 1.55;
+    const outpostDome = new THREE.Mesh(
+      new THREE.SphereGeometry(3.6, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.MeshStandardMaterial({ color: 0x28282b, roughness: 0.54, metalness: 0.56 }),
+    );
+    outpostDome.position.y = 3.05;
+    this.outpostFallback.add(outpostBody, outpostDome);
+    this.outpost.add(this.outpostFallback);
+    this.scene.add(this.outpost);
+
+    const npcX = 3.6;
+    const npcZ = 14.2;
+    this.npc.position.set(npcX, terrainHeight(npcX, npcZ), npcZ);
+    this.npc.rotation.y = -1.1;
+    const suit = new THREE.MeshStandardMaterial({ color: 0x9a633f, roughness: 0.82, flatShading: true });
+    const helmet = new THREE.MeshStandardMaterial({ color: 0x9b9482, roughness: 0.52, metalness: 0.25 });
+    const visor = new THREE.MeshStandardMaterial({ color: 0x123b40, emissive: 0x145c5c, emissiveIntensity: 1.2 });
+    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 0.72, 4, 8), suit);
+    torso.position.y = 1.35;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 8), helmet);
+    head.position.y = 2.35;
+    const face = new THREE.Mesh(new THREE.SphereGeometry(0.32, 10, 6), visor);
+    face.position.set(0, 2.36, -0.39);
+    face.scale.set(1, 0.72, 0.25);
+    this.npcFallback.add(torso, head, face);
+    this.npc.add(this.npcFallback);
+    this.scene.add(this.npc);
   }
 
   private createPlayer(): void {
@@ -631,18 +688,18 @@ export class XenowakeGame {
     const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.48, 0.8, 4, 8), cloth);
     torso.position.y = 1.4;
     torso.scale.set(0.9, 1, 0.72);
-    this.player.add(torso);
+    this.playerFallback.add(torso);
     const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.68, 1), skinLight);
     head.position.set(0, 2.45, -0.08);
     head.scale.set(0.9, 0.82, 1.16);
-    this.player.add(head);
+    this.playerFallback.add(head);
 
     const eyeMaterial = new THREE.MeshBasicMaterial({ color: CYAN });
     for (const side of [-1, 1]) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(0.105, 8, 5), eyeMaterial);
       eye.position.set(side * 0.25, 2.5, -0.61);
       eye.scale.set(1.4, 0.65, 0.35);
-      this.player.add(eye);
+      this.playerFallback.add(eye);
     }
 
     const crestMaterial = skin.clone();
@@ -651,7 +708,7 @@ export class XenowakeGame {
       const crest = new THREE.Mesh(new THREE.ConeGeometry(0.16 + index * 0.025, 0.72, 4), crestMaterial);
       crest.rotation.x = Math.PI / 2.45;
       crest.position.set(0, 2.55 - index * 0.08, 0.4 + index * 0.22);
-      this.player.add(crest);
+      this.playerFallback.add(crest);
     }
 
     const limbGeometry = new THREE.CapsuleGeometry(0.12, 0.72, 3, 5);
@@ -659,11 +716,11 @@ export class XenowakeGame {
       const arm = new THREE.Mesh(limbGeometry, skin);
       arm.position.set(side * 0.56, 1.42, 0);
       arm.rotation.z = side * 0.18;
-      this.player.add(arm);
+      this.playerFallback.add(arm);
       this.playerLimbs.push(arm);
       const leg = new THREE.Mesh(limbGeometry, skin);
       leg.position.set(side * 0.25, 0.45, 0.02);
-      this.player.add(leg);
+      this.playerFallback.add(leg);
       this.playerLimbs.push(leg);
     }
 
@@ -677,7 +734,7 @@ export class XenowakeGame {
     this.playerMaterials.push(packMaterial);
     const pack = new THREE.Mesh(new THREE.OctahedronGeometry(0.34, 0), packMaterial);
     pack.position.set(0, 1.62, 0.48);
-    this.player.add(pack);
+    this.playerFallback.add(pack);
 
     const shadow = new THREE.Mesh(
       new THREE.CircleGeometry(0.82, 20),
@@ -685,8 +742,9 @@ export class XenowakeGame {
     );
     shadow.rotation.x = -Math.PI / 2;
     shadow.position.y = 0.04;
-    this.player.add(shadow);
-    this.player.traverse((object) => {
+    this.playerFallback.add(shadow);
+    this.player.add(this.playerFallback);
+    this.playerFallback.traverse((object) => {
       if (object instanceof THREE.Mesh && object !== shadow) object.castShadow = true;
     });
     this.scene.add(this.player);
@@ -695,6 +753,8 @@ export class XenowakeGame {
   private createBeacons(): void {
     for (const layout of BEACON_LAYOUT) {
       const group = new THREE.Group();
+      const fallback = new THREE.Group();
+      group.add(fallback);
       const groundY = terrainHeight(layout.x, layout.z);
       group.position.set(layout.x, groundY, layout.z);
       const stone = new THREE.MeshStandardMaterial({
@@ -712,13 +772,13 @@ export class XenowakeGame {
       });
       const base = new THREE.Mesh(new THREE.CylinderGeometry(3.7, 5.2, 1.5, 6), stone);
       base.position.y = 0.75;
-      group.add(base);
+      fallback.add(base);
       const spire = new THREE.Mesh(new THREE.ConeGeometry(2.2, 13.5, 5), stone);
       spire.position.y = 7.7;
-      group.add(spire);
+      fallback.add(spire);
       const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.72, 0), coreMaterial);
       core.position.y = 14.55;
-      group.add(core);
+      fallback.add(core);
       const beamMaterial = new THREE.MeshBasicMaterial({
         color: CYAN,
         transparent: true,
@@ -747,7 +807,7 @@ export class XenowakeGame {
           object.receiveShadow = true;
         }
       });
-      this.beacons.push({ name: layout.name, group, position, coreMaterial, beamMaterial, haloMaterial, active: false });
+      this.beacons.push({ name: layout.name, group, position, coreMaterial, beamMaterial, haloMaterial, fallback, active: false });
       this.scene.add(group);
     }
   }
@@ -755,6 +815,8 @@ export class XenowakeGame {
   private createXenites(): void {
     for (const layout of XENITE_LAYOUT) {
       const group = new THREE.Group();
+      const fallback = new THREE.Group();
+      group.add(fallback);
       const y = terrainHeight(layout.x, layout.z) + 1.3;
       group.position.set(layout.x, y, layout.z);
       const material = new THREE.MeshStandardMaterial({
@@ -767,7 +829,7 @@ export class XenowakeGame {
       });
       const main = new THREE.Mesh(new THREE.OctahedronGeometry(0.72, 0), material);
       main.scale.set(0.75, 1.55, 0.75);
-      group.add(main);
+      fallback.add(main);
       const ringMaterial = new THREE.MeshBasicMaterial({
         color: CYAN,
         transparent: true,
@@ -778,13 +840,15 @@ export class XenowakeGame {
       const ring = new THREE.Mesh(new THREE.TorusGeometry(1.1, 0.05, 5, 28), ringMaterial);
       ring.rotation.x = Math.PI / 2;
       group.add(ring);
-      this.xenites.push({ group, baseY: y, collected: false });
+      this.xenites.push({ group, fallback, baseY: y, collected: false });
       this.scene.add(group);
     }
   }
 
   private createPortal(): Portal {
     const group = new THREE.Group();
+    const fallback = new THREE.Group();
+    group.add(fallback);
     const groundY = terrainHeight(0, 8);
     group.position.set(0, groundY + 7.1, 8);
     const ringMaterial = new THREE.MeshStandardMaterial({
@@ -796,12 +860,12 @@ export class XenowakeGame {
       flatShading: true,
     });
     const ring = new THREE.Mesh(new THREE.TorusGeometry(6.1, 0.62, 8, 36), ringMaterial);
-    group.add(ring);
+    fallback.add(ring);
     const inner = new THREE.Mesh(
       new THREE.TorusGeometry(5.4, 0.12, 5, 32),
       new THREE.MeshBasicMaterial({ color: 0x245b55, transparent: true, opacity: 0.45 }),
     );
-    group.add(inner);
+    fallback.add(inner);
     const discMaterial = new THREE.MeshBasicMaterial({
       color: 0x52f7e8,
       transparent: true,
@@ -816,13 +880,17 @@ export class XenowakeGame {
     const light = new THREE.PointLight(CYAN, 0, 24, 2);
     light.position.z = 1;
     group.add(light);
-    return { group, ring, ringMaterial, disc, discMaterial, light, active: false };
+    return { group, fallback, ring, ringMaterial, disc, discMaterial, light, active: false };
   }
 
   private createDrones(): void {
     for (let index = 0; index < DRONE_LAYOUT.length; index += 1) {
       const layout = DRONE_LAYOUT[index];
       const group = new THREE.Group();
+      const fallback = new THREE.Group();
+      group.add(fallback);
+      const kind: Drone['kind'] = index < 3 ? 'guardian' : 'crawler';
+      const hoverHeight = kind === 'guardian' ? 2.85 : 0.08;
       const coreMaterial = new THREE.MeshStandardMaterial({
         color: 0x2b252a,
         emissive: 0xc03224,
@@ -832,7 +900,7 @@ export class XenowakeGame {
         flatShading: true,
       });
       const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.62, 1), coreMaterial);
-      group.add(core);
+      fallback.add(core);
       const frameMaterial = new THREE.MeshStandardMaterial({
         color: 0x19191d,
         metalness: 0.8,
@@ -840,11 +908,11 @@ export class XenowakeGame {
       });
       const frame = new THREE.Mesh(new THREE.TorusGeometry(1.08, 0.12, 5, 18), frameMaterial);
       frame.rotation.x = Math.PI / 2;
-      group.add(frame);
+      fallback.add(frame);
       const eye = new THREE.Mesh(new THREE.SphereGeometry(0.17, 8, 5), new THREE.MeshBasicMaterial({ color: 0xff5038 }));
       eye.position.z = -0.56;
-      group.add(eye);
-      const y = terrainHeight(layout.x, layout.z) + 3.1;
+      fallback.add(eye);
+      const y = terrainHeight(layout.x, layout.z) + hoverHeight;
       group.position.set(layout.x, y, layout.z);
       const home = new THREE.Vector3(layout.x, 0, layout.z);
       group.traverse((object) => {
@@ -852,8 +920,11 @@ export class XenowakeGame {
       });
       this.drones.push({
         group,
+        fallback,
         home,
         coreMaterial,
+        kind,
+        hoverHeight,
         orbit: index * 1.7,
         stunned: 0,
         attackCooldown: 0,
@@ -862,6 +933,78 @@ export class XenowakeGame {
       });
       this.scene.add(group);
     }
+  }
+
+  private async loadDetailedAssets(): Promise<void> {
+    await this.assets.preload();
+
+    this.playerVisual = this.attachDetail('nix-alien', this.player, this.playerFallback, {
+      scale: 0.96,
+    });
+    this.npcVisual = this.attachDetail('ari-scout', this.npc, this.npcFallback, {
+      scale: 0.96,
+    });
+    this.attachDetail('frontier-outpost', this.outpost, this.outpostFallback, { scale: 0.82 });
+    this.attachDetail('wrecked-shuttle', this.crashSite, this.crashFallback, {
+      scale: 1.08,
+      rotationY: -0.24,
+    });
+    this.attachDetail('crash-portal', this.portal.group, this.portal.fallback);
+
+    for (const beacon of this.beacons) {
+      this.attachDetail('signal-beacon', beacon.group, beacon.fallback);
+    }
+    for (const xenite of this.xenites) {
+      this.attachDetail('xenite-cluster', xenite.group, xenite.fallback, {
+        scale: 0.72,
+        y: -1.3,
+      });
+    }
+    for (const drone of this.drones) {
+      const asset: AssetName = drone.kind === 'guardian' ? 'guardian-drone' : 'mars-crawler';
+      this.attachDetail(asset, drone.group, drone.fallback, {
+        scale: drone.kind === 'guardian' ? 0.92 : 0.76,
+      });
+    }
+
+    const formations = [
+      { x: 24, z: 18, scale: 1.45, rotation: 0.22 },
+      { x: 13, z: 22, scale: 0.92, rotation: -0.44 },
+      { x: -19, z: -7, scale: 1.08, rotation: 1.2 },
+      { x: 34, z: -5, scale: 1.18, rotation: 0.72 },
+    ];
+    for (const formation of formations) {
+      const detail = this.assets.instantiate('martian-rock');
+      if (!detail) continue;
+      detail.position.set(
+        formation.x,
+        terrainHeight(formation.x, formation.z),
+        formation.z,
+      );
+      detail.rotation.y = formation.rotation;
+      detail.scale.setScalar(formation.scale);
+      this.scene.add(detail);
+    }
+
+    if (this.phase === 'playing') {
+      this.callbacks.onToast('Paket visual 3D terkalibrasi', 'success');
+    }
+  }
+
+  private attachDetail(
+    name: AssetName,
+    parent: THREE.Group,
+    fallback: THREE.Group,
+    options: { scale?: number; x?: number; y?: number; z?: number; rotationY?: number } = {},
+  ): THREE.Group | null {
+    const detail = this.assets.instantiate(name);
+    if (!detail) return null;
+    detail.position.set(options.x ?? 0, options.y ?? 0, options.z ?? 0);
+    detail.rotation.y = options.rotationY ?? 0;
+    detail.scale.setScalar(options.scale ?? 1);
+    fallback.visible = false;
+    parent.add(detail);
+    return detail;
   }
 
   private createDust(): void {
@@ -930,7 +1073,7 @@ export class XenowakeGame {
     for (let index = 0; index < this.drones.length; index += 1) {
       const drone = this.drones[index];
       const layout = DRONE_LAYOUT[index];
-      drone.group.position.set(layout.x, terrainHeight(layout.x, layout.z) + 3.1, layout.z);
+      drone.group.position.set(layout.x, terrainHeight(layout.x, layout.z) + drone.hoverHeight, layout.z);
       drone.stunned = 0;
       drone.attackCooldown = 0;
       drone.chaseTimer = 0;
@@ -1083,6 +1226,16 @@ export class XenowakeGame {
       const direction = index % 2 === 0 ? 1 : -1;
       this.playerLimbs[index].rotation.x = damp(this.playerLimbs[index].rotation.x, stride * direction, 12, delta);
     }
+    if (this.playerVisual) {
+      const bob = moving ? Math.abs(Math.sin(this.walkCycle)) * 0.055 : Math.sin(this.elapsed * 1.8) * 0.018;
+      this.playerVisual.position.y = damp(this.playerVisual.position.y, bob, 13, delta);
+      this.playerVisual.rotation.z = damp(
+        this.playerVisual.rotation.z,
+        moving ? -this.input.move.x * 0.055 : 0,
+        10,
+        delta,
+      );
+    }
   }
 
   private collectNearbyXenite(): void {
@@ -1127,26 +1280,30 @@ export class XenowakeGame {
 
         if (drone.alert) {
           const inverse = 1 / Math.max(0.001, Math.sqrt(distanceSquared));
-          drone.group.position.x += dx * inverse * 3.25 * delta;
-          drone.group.position.z += dz * inverse * 3.25 * delta;
+          const chaseSpeed = drone.kind === 'guardian' ? 3.25 : 2.72;
+          drone.group.position.x += dx * inverse * chaseSpeed * delta;
+          drone.group.position.z += dz * inverse * chaseSpeed * delta;
           drone.group.rotation.y = Math.atan2(dx, dz);
         } else {
           drone.orbit += delta * 0.42;
-          const targetX = drone.home.x + Math.cos(drone.orbit) * 5.2;
-          const targetZ = drone.home.z + Math.sin(drone.orbit) * 5.2;
+          const orbitRadius = drone.kind === 'guardian' ? 5.2 : 3.8;
+          const targetX = drone.home.x + Math.cos(drone.orbit) * orbitRadius;
+          const targetZ = drone.home.z + Math.sin(drone.orbit) * orbitRadius;
           drone.group.position.x = damp(drone.group.position.x, targetX, 0.85, delta);
           drone.group.position.z = damp(drone.group.position.z, targetZ, 0.85, delta);
           drone.group.rotation.y += delta * 0.7;
         }
 
-        if (distanceSquared < 2.5 * 2.5 && drone.attackCooldown <= 0 && this.invulnerability <= 0) {
+        const attackRadius = drone.kind === 'guardian' ? 2.5 : 2.9;
+        if (distanceSquared < attackRadius * attackRadius && drone.attackCooldown <= 0 && this.invulnerability <= 0) {
           drone.attackCooldown = 1.5;
           this.takeDamage();
         }
       }
-      const hover = 2.85 + Math.sin(this.elapsed * 2.4 + index) * 0.28;
+      const hover = drone.hoverHeight + Math.sin(this.elapsed * (drone.kind === 'guardian' ? 2.4 : 4.1) + index)
+        * (drone.kind === 'guardian' ? 0.28 : 0.045);
       drone.group.position.y = terrainHeight(drone.group.position.x, drone.group.position.z) + hover;
-      drone.group.rotation.x = Math.sin(this.elapsed * 2 + index) * 0.04;
+      drone.group.rotation.x = drone.kind === 'guardian' ? Math.sin(this.elapsed * 2 + index) * 0.04 : 0;
     }
   }
 
@@ -1176,7 +1333,7 @@ export class XenowakeGame {
     for (let index = 0; index < this.drones.length; index += 1) {
       const drone = this.drones[index];
       const layout = DRONE_LAYOUT[index];
-      drone.group.position.set(layout.x, terrainHeight(layout.x, layout.z) + 3.1, layout.z);
+      drone.group.position.set(layout.x, terrainHeight(layout.x, layout.z) + drone.hoverHeight, layout.z);
       drone.chaseTimer = 0;
       drone.alert = false;
     }
@@ -1221,6 +1378,17 @@ export class XenowakeGame {
     if (this.phase !== 'playing' || !this.currentInteraction || this.respawnTimer > 0) return;
     if (this.currentInteraction === 'portal') {
       if (this.portal.active) this.finishRun();
+      return;
+    }
+    if (this.currentInteraction === 'npc') {
+      const briefing = this.beaconsActive === 0
+        ? 'ARI: Cari Xenite cyan. Satu kristal menyalakan satu menara.'
+        : this.beaconsActive < 3
+          ? `ARI: ${3 - this.beaconsActive} menara tersisa. Pulse bisa melumpuhkan penjaga.`
+          : 'ARI: Jaringan stabil. Portal di Crash Basin siap membawamu pulang.';
+      this.callbacks.onToast(briefing, 'normal');
+      this.audio.play('activate');
+      if (navigator.vibrate) navigator.vibrate(12);
       return;
     }
     const beacon = this.currentInteraction;
@@ -1273,7 +1441,7 @@ export class XenowakeGame {
   }
 
   private updateInteraction(force: boolean): void {
-    let interaction: Beacon | 'portal' | null = null;
+    let interaction: Beacon | 'portal' | 'npc' | null = null;
     let label = '';
     let enabled = true;
     let closest = Number.POSITIVE_INFINITY;
@@ -1288,6 +1456,15 @@ export class XenowakeGame {
         label = this.xeniteCount > 0 ? `Aktifkan ${beacon.name}` : 'Butuh 1 Xenite';
         enabled = this.xeniteCount > 0;
       }
+    }
+    const npcDx = this.npc.position.x - this.player.position.x;
+    const npcDz = this.npc.position.z - this.player.position.z;
+    const npcDistance = npcDx * npcDx + npcDz * npcDz;
+    if (npcDistance < 4.8 * 4.8 && npcDistance < closest) {
+      closest = npcDistance;
+      interaction = 'npc';
+      label = 'Bicara dengan ARI';
+      enabled = true;
     }
     if (this.portal.active) {
       const dx = this.portal.group.position.x - this.player.position.x;
@@ -1315,6 +1492,10 @@ export class XenowakeGame {
   }
 
   private updateAmbient(delta: number, time: number): void {
+    if (this.npcVisual) {
+      this.npcVisual.position.y = Math.sin(time * 1.7) * 0.018;
+      this.npcVisual.rotation.z = Math.sin(time * 0.72) * 0.008;
+    }
     for (let index = 0; index < this.beacons.length; index += 1) {
       const beacon = this.beacons[index];
       beacon.group.rotation.y = Math.sin(time * 0.14 + index) * 0.012;

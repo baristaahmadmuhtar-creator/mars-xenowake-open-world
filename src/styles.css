@@ -1313,6 +1313,16 @@ a:focus-visible {
     display: none;
   }
 
+  .interact-button {
+    right: max(1rem, env(safe-area-inset-right));
+    bottom: max(7.4rem, calc(env(safe-area-inset-bottom) + 7rem));
+    left: auto;
+    max-width: min(13rem, calc(100% - 2rem));
+    justify-content: center;
+    text-align: center;
+    transform: none;
+  }
+
   .menu-copy {
     bottom: 16vh;
     width: calc(100% - 3rem);
@@ -1336,6 +1346,16 @@ a:focus-visible {
 
   .hud-top-right .minimap-frame {
     display: none;
+  }
+
+  .interact-button {
+    right: max(1rem, env(safe-area-inset-right));
+    bottom: max(7.4rem, calc(env(safe-area-inset-bottom) + 7rem));
+    left: auto;
+    max-width: min(13rem, calc(100% - 2rem));
+    justify-content: center;
+    text-align: center;
+    transform: none;
   }
 }
 

@@ -44,7 +44,7 @@ app.innerHTML = `
       <div class="loading-copy">
         <p>Menyelaraskan kesadaran</p>
         <div class="loading-line"><i></i></div>
-        <span>Memetakan Valles Marineris / 03</span>
+        <span>Merakit PBR asset pack / 10 GLB</span>
       </div>
     </section>
 
@@ -58,7 +58,7 @@ app.innerHTML = `
           <div><span>02</span><p><strong>Aktifkan 3 menara</strong>Urutan bebas. Setiap sinyal membangunkan penjaga baru.</p></div>
           <div><span>03</span><p><strong>Kembali ke cincin</strong>Portal di lokasi jatuh terbuka setelah jaringan lengkap.</p></div>
         </div>
-        <p class="desktop-controls">WASD bergerak · drag melihat · Space pulse · Shift dash · E interaksi</p>
+        <p class="desktop-controls">WASD bergerak · drag melihat · Space pulse · Shift dash · E interaksi / dialog ARI</p>
       </div>
     </section>
 

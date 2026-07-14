@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mars-xenowake-v2';
+const CACHE_NAME = 'mars-xenowake-v3-assets';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
@@ -8,6 +8,16 @@ const APP_SHELL = [
   '/icons/icon-512.png',
   '/icons/icon-maskable-512.png',
   '/assets/xenowake-key-art.webp',
+  '/models/nix-alien.glb',
+  '/models/ari-scout.glb',
+  '/models/guardian-drone.glb',
+  '/models/mars-crawler.glb',
+  '/models/signal-beacon.glb',
+  '/models/frontier-outpost.glb',
+  '/models/crash-portal.glb',
+  '/models/xenite-cluster.glb',
+  '/models/martian-rock.glb',
+  '/models/wrecked-shuttle.glb',
 ];
 
 self.addEventListener('install', (event) => {

@@ -1,6 +1,6 @@
 # Product Requirements Document — Mars: Xenowake
 
-Status: MVP diimplementasikan dan lolos pengujian otomatis  
+Status: Release 2.0 dengan Forge Asset Pack diimplementasikan
 Platform: Safari iOS, browser Android, dan browser desktop  
 Bahasa antarmuka: Indonesia  
 
@@ -75,7 +75,8 @@ Baca landmark → jelajah → serap Xenite → hindari/lumpuhkan drone
 
 - Tujuh Xenite collectible; satu energi diperlukan per menara.
 - Tiga menara dapat diaktifkan dalam urutan bebas.
-- Drone memiliki state patrol, detect, chase, attack, stunned, dan reset.
+- Guardian terbang dan Mars Crawler darat memiliki state patrol, detect, chase, attack, stunned, dan reset.
+- NPC ARI dapat diajak bicara dan memberi arahan yang berubah mengikuti progres beacon.
 - Tiga segmen health; damage memiliki invulnerability window.
 - Pulse radial, Dash dengan cooldown, kondisi mati/respawn, portal, menang, dan replay.
 
@@ -119,7 +120,8 @@ Palet utama adalah rust, oxblood, charcoal, dan pale sand. Cyan menjadi satu-sat
 - Tidak memakai post-processing berat.
 - Fog, LOD visual sederhana, dan batas dunia menjaga jumlah objek tampak.
 - Target tipikal di bawah 100 draw calls dan minimal 30 FPS pada perangkat referensi.
-- Production payload awal jauh di bawah budget 1.5 MB.
+- Sepuluh model GLB produksi berjumlah sekitar 1,43 MB sebelum kompresi transport; clone berbagi geometry/material.
+- Mesh prosedural tetap tersedia sebagai fallback bila model gagal dimuat.
 - Penanganan `webglcontextlost` dan `webglcontextrestored` disediakan.
 - Manifest installable, ikon iOS/Android, dan service worker versioned membuat app shell dapat dimuat ulang secara offline setelah kunjungan pertama.
 

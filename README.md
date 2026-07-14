@@ -7,6 +7,16 @@ Game action-exploration 3D open-zone di Mars yang langsung berjalan di browser. 
 
 PRD lengkap ada di [`docs/PRD.md`](docs/PRD.md), sedangkan matriks pengujian mobile ada di [`docs/MOBILE_QA.md`](docs/MOBILE_QA.md).
 
+## Release 2.0 — Forge Asset Pack
+
+- Sepuluh aset GLB orisinal dibuat melalui pipeline Blender 5.2: NIX, ARI, Guardian Drone, Mars Crawler, signal beacon, frontier outpost, crash portal, Xenite cluster, formasi batu, dan wrecked shuttle.
+- Asset loader memuat seluruh paket paralel, berbagi geometri/material pada clone, serta mempertahankan mesh prosedural sebagai fallback ketika jaringan atau cache bermasalah.
+- NPC ARI hadir di dunia dan memberi briefing kontekstual melalui tombol interaksi.
+- Tiga Guardian terbang dan dua Crawler darat mempunyai tinggi, kecepatan kejar, orbit, serta radius serang berbeda.
+- Outpost, wreck, portal, beacon, Xenite, pemain, NPC, musuh, dan formasi batu sekarang memakai model produksi terintegrasi.
+- Semua GLB berjumlah sekitar 1,43 MB sebelum kompresi HTTP; PWA v3 melakukan precache paket model untuk kunjungan offline berikutnya.
+- Concept sheets, render QA, dan generator deterministik tersedia di `docs/concepts`, `docs/renders`, dan `tools/blender`.
+
 ## Release 1.1
 
 - Objective HUD kini memilih target terdekat dan menampilkan jarak: Xenite, menara, lalu portal.
@@ -51,7 +61,7 @@ Kontrol mobile:
 - Geser area kanan: putar kamera.
 - `Pulse`: gelombang radial yang melumpuhkan drone sementara.
 - `Dash`: dorongan cepat dengan invulnerability singkat.
-- Tombol interaksi: muncul dekat menara dan portal.
+- Tombol interaksi: muncul dekat menara, portal, dan NPC ARI.
 
 Kontrol desktop:
 
@@ -67,7 +77,8 @@ Kontrol desktop:
 - Dunia Mars 3D prosedural 190 × 190 unit dengan terrain, biome kristal, batas badai/tebing, wreck, tiga landmark menara, portal, debu, langit shader, dan dua bulan.
 - Alien third-person dengan animasi prosedural, kamera orbit, health, damage, dash, pulse, respawn, serta checkpoint objective.
 - Xenite collectible, tiga beacon bebas urutan, eskalasi jumlah drone, portal finale, win stats, replay, dan best-time persistence.
-- Guardian drone dengan patrol, detect, chase, attack, stun, dan reset setelah respawn.
+- Guardian drone dan Mars Crawler dengan patrol, detect, chase, attack, stun, dan reset setelah respawn.
+- NPC ARI yang dapat diajak bicara, frontier outpost, serta paket landmark GLB produksi.
 - HUD, minimap, kompas, cooldown, onboarding toast, pause, mute, kualitas Low/High, error WebGL2, context-loss handling, dan layout safe-area.
 - Input Pointer Events multi-touch: joystick, look, dan action dapat digunakan simultan; `pointercancel`, blur, page hide, serta visibility change dibersihkan.
 - Audio procedural Web Audio tanpa file audio eksternal dan baru dibuka setelah gesture pengguna.
@@ -101,13 +112,18 @@ Emulasi browser tidak menggantikan release gate pada perangkat fisik. Sebelum ri
 docs/
   PRD.md
   MOBILE_QA.md
+  ASSET_PIPELINE.md
+  concepts/*.png
+  renders/*.png
 public/
   assets/xenowake-key-art.webp
+  models/*.glb
   icons/*.png
   favicon.svg
   manifest.webmanifest
   sw.js
 src/
+  game/AssetLibrary.ts
   game/AudioEngine.ts
   game/InputController.ts
   game/storage.ts
@@ -115,4 +131,5 @@ src/
   main.ts
   styles.css
 vercel.json
+tools/blender/generate_assets.py
 ```
