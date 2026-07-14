@@ -5,6 +5,7 @@ Dokumen ini adalah kontrak QA untuk MVP **Mars: Xenowake**. Tujuannya bukan seka
 ## 1. Ringkasan audit
 
 Tanggal audit awal: 12 Juli 2026  
+Audit Release 2.1: 15 Juli 2026
 Lingkungan audit: Windows, Chromium/Node lokal; **bukan** perangkat iOS atau Android fisik.
 
 Temuan statis yang sudah dapat dikonfirmasi:
@@ -13,7 +14,14 @@ Temuan statis yang sudah dapat dikonfirmasi:
 - Manifest meminta orientasi landscape dan membuka game dari `/`.
 - Key art WebP berukuran 131.000 byte, cukup kecil untuk tidak menjadi risiko utama waktu muat.
 - Kontrak produk memang menyediakan permainan portrait dengan anjuran rotasi, bukan memblokir portrait.
-- Instalasi PWA/offline **bukan** bagian dukungan rilis saat ini: manifest belum memiliki ikon dan produk belum menjanjikan service worker/offline play.
+- Manifest, ikon iOS/Android, dan service worker versioned telah tersedia. Kunjungan online pertama mem-precache shell serta paket GLB agar reload berikutnya tetap dapat dimulai saat jaringan terputus.
+
+Hasil smoke otomatis Release 2.1:
+
+- Chromium 844 × 390 dan 390 × 844: start, dialog ARI, fokus tombol, Escape/tutup, timer pause, safe-area, dan no-scroll lulus tanpa error konsol.
+- WebKit mobile 844 × 390: start, dialog ARI, tombol kembali, fokus, dan layout landscape pendek lulus tanpa error konsol.
+- Service worker v4: 20 entri awal tersimpan, mencakup 10 GLB dan dua bundle runtime ter-hash; reload offline terkontrol lulus tanpa error konsol.
+- Verifikasi ini memakai emulasi browser desktop dan tidak menggantikan smoke manual pada iPhone/Android fisik Tier A.
 
 Status build, gameplay, dan browser smoke harus diisi dari hasil build final. Hasil desktop tidak boleh diberi label “mobile pass”; lihat bagian 10.
 

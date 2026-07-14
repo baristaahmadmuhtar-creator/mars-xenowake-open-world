@@ -1,6 +1,6 @@
 # Product Requirements Document — Mars: Xenowake
 
-Status: Release 2.0 dengan Forge Asset Pack diimplementasikan
+Status: Release 2.1 “Living Mars” diimplementasikan
 Platform: Safari iOS, browser Android, dan browser desktop  
 Bahasa antarmuka: Indonesia  
 
@@ -76,7 +76,7 @@ Baca landmark → jelajah → serap Xenite → hindari/lumpuhkan drone
 - Tujuh Xenite collectible; satu energi diperlukan per menara.
 - Tiga menara dapat diaktifkan dalam urutan bebas.
 - Guardian terbang dan Mars Crawler darat memiliki state patrol, detect, chase, attack, stunned, dan reset.
-- NPC ARI dapat diajak bicara dan memberi arahan yang berubah mengikuti progres beacon.
+- NPC ARI membuka panel transmisi sinematik dan memberi directive yang berubah mengikuti progres beacon.
 - Tiga segmen health; damage memiliki invulnerability window.
 - Pulse radial, Dash dengan cooldown, kondisi mati/respawn, portal, menang, dan replay.
 
@@ -94,7 +94,7 @@ Baca landmark → jelajah → serap Xenite → hindari/lumpuhkan drone
 
 **Content plan:** title poster full-canvas; objective langsung di dunia; HUD pendukung yang ringkas; payoff portal yang jelas.
 
-**Interaction thesis:** transisi sinematik poster ke dunia; depth dari debu dan parallax kamera; beacon beam, pulse ring, hit flash, cooldown, dan portal yang bereaksi terhadap progres.
+**Interaction thesis:** transisi sinematik poster ke dunia; depth dari debu dan parallax kamera; beacon beam, pulse ring, hit flash, cooldown, dan portal yang bereaksi terhadap progres. Makhluk, collectible, NPC, dan musuh memakai secondary motion agar dunia terasa hidup tanpa post-processing berat.
 
 Palet utama adalah rust, oxblood, charcoal, dan pale sand. Cyan menjadi satu-satunya aksen interaksi. Siluet NIX membulat dan organik agar kontras dengan reruntuhan tajam. UI mengutamakan status dan aksi, bukan dekorasi.
 

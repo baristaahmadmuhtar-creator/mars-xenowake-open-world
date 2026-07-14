@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mars-xenowake-v3-assets';
+const CACHE_NAME = 'mars-xenowake-v4-living-mars';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
@@ -22,9 +22,22 @@ const APP_SHELL = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(APP_SHELL))
-      .then(() => self.skipWaiting()),
+    (async () => {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.addAll(APP_SHELL.filter((url) => url !== '/'));
+
+      const shellResponse = await fetch('/');
+      if (!shellResponse.ok) throw new Error(`Unable to precache app shell: ${shellResponse.status}`);
+      const shellMarkup = await shellResponse.clone().text();
+      const runtimeAssets = Array.from(
+        shellMarkup.matchAll(/(?:src|href)="(\/assets\/[^"?#]+)"/g),
+        (match) => match[1],
+      );
+
+      await cache.put('/', shellResponse);
+      if (runtimeAssets.length > 0) await cache.addAll(runtimeAssets);
+      await self.skipWaiting();
+    })(),
   );
 });
 
@@ -62,14 +75,14 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith(
     caches.match(request).then((cached) => {
-      const network = fetch(request).then((response) => {
+      if (cached) return cached;
+      return fetch(request).then((response) => {
         if (response.ok) {
           const copy = response.clone();
           void caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
         }
         return response;
       });
-      return cached || network;
     }),
   );
 });

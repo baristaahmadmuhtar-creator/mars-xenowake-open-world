@@ -1,5 +1,5 @@
 import './styles.css';
-import { XenowakeGame, type HudState, type WinStats } from './game/XenowakeGame';
+import { XenowakeGame, type DialogueState, type HudState, type WinStats } from './game/XenowakeGame';
 import { gameStorage, type Quality } from './game/storage';
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -120,6 +120,25 @@ app.innerHTML = `
       <div id="toast" class="toast" role="status" aria-live="polite"></div>
     </section>
 
+    <section id="dialogue-panel" class="dialogue-panel" hidden role="dialog" aria-modal="true" aria-labelledby="dialogue-title">
+      <div class="dialogue-shell">
+        <div class="dialogue-identity" aria-hidden="true">
+          <span>ARI</span><i></i><small>03</small>
+        </div>
+        <div class="dialogue-copy">
+          <p id="dialogue-speaker" class="eyebrow">ARI / Frontier Scout</p>
+          <h2 id="dialogue-title">Jaringan ini mengenalmu.</h2>
+          <p id="dialogue-body"></p>
+          <div class="dialogue-objective"><span>Directive</span><strong id="dialogue-objective"></strong></div>
+          <button id="dialogue-continue" class="dialogue-continue" type="button">
+            <span>Kembali ke ekspedisi</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M14 7l5 5-5 5" /></svg>
+          </button>
+        </div>
+        <button id="dialogue-close" class="dialogue-close" type="button" aria-label="Tutup transmisi">×</button>
+      </div>
+    </section>
+
     <div id="damage-flash" class="damage-flash" aria-hidden="true"></div>
     <div id="respawn-overlay" class="respawn-overlay" hidden aria-live="assertive">
       <span>Kesadaran terputus</span><strong>Meregenerasi tubuh…</strong>
@@ -180,6 +199,8 @@ const pauseScreen = getElement<HTMLElement>('pause-screen');
 const winScreen = getElement<HTMLElement>('win-screen');
 const unsupportedScreen = getElement<HTMLElement>('unsupported-screen');
 const respawnOverlay = getElement<HTMLElement>('respawn-overlay');
+const dialoguePanel = getElement<HTMLElement>('dialogue-panel');
+const dialogueContinue = getElement<HTMLButtonElement>('dialogue-continue');
 const interactButton = getElement<HTMLButtonElement>('interact-button');
 const interactLabel = getElement<HTMLElement>('interact-label');
 const toast = getElement<HTMLElement>('toast');
@@ -205,6 +226,7 @@ const callbacks = {
     interactButton.classList.toggle('is-disabled', !enabled);
     if (label) interactLabel.textContent = label;
   },
+  onDialogue: showDialogue,
   onDamage: (): void => {
     shell.classList.remove('is-damaged');
     void shell.offsetWidth;
@@ -270,6 +292,8 @@ getElement<HTMLButtonElement>('pause-button').addEventListener('click', () => {
 getElement<HTMLButtonElement>('resume-button').addEventListener('click', resumeGame);
 getElement<HTMLButtonElement>('restart-button').addEventListener('click', restartGame);
 getElement<HTMLButtonElement>('replay-button').addEventListener('click', restartGame);
+dialogueContinue.addEventListener('click', () => game.closeDialogue());
+getElement<HTMLButtonElement>('dialogue-close').addEventListener('click', () => game.closeDialogue());
 
 muteButton.addEventListener('click', () => {
   storage.settings = gameStorage.updateSettings({ muted: !storage.settings.muted });
@@ -462,6 +486,25 @@ function showToast(message: string, tone: 'normal' | 'warning' | 'success' = 'no
   void toast.offsetWidth;
   toast.classList.add('is-visible');
   toastTimer = window.setTimeout(() => toast.classList.remove('is-visible'), 3200);
+}
+
+function showDialogue(dialogue: DialogueState | null): void {
+  const isOpen = dialogue !== null;
+  shell.classList.toggle('is-dialogue', isOpen);
+  dialoguePanel.classList.remove('is-visible');
+  if (!dialogue) {
+    dialoguePanel.hidden = true;
+    return;
+  }
+  getElement<HTMLElement>('dialogue-speaker').textContent = dialogue.speaker;
+  getElement<HTMLElement>('dialogue-title').textContent = dialogue.title;
+  getElement<HTMLElement>('dialogue-body').textContent = dialogue.body;
+  getElement<HTMLElement>('dialogue-objective').textContent = dialogue.objective;
+  dialoguePanel.hidden = false;
+  requestAnimationFrame(() => {
+    dialoguePanel.classList.add('is-visible');
+    dialogueContinue.focus({ preventScroll: true });
+  });
 }
 
 function scheduleTutorial(): void {

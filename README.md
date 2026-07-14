@@ -7,6 +7,14 @@ Game action-exploration 3D open-zone di Mars yang langsung berjalan di browser. 
 
 PRD lengkap ada di [`docs/PRD.md`](docs/PRD.md), sedangkan matriks pengujian mobile ada di [`docs/MOBILE_QA.md`](docs/MOBILE_QA.md).
 
+## Release 2.1 — Living Mars
+
+- ARI sekarang mempunyai panel transmisi sinematik yang benar-benar menghentikan simulasi, mendukung tombol tutup/lanjut, keyboard Escape, dan directive kontekstual untuk setiap fase ekspedisi.
+- NIX, ARI, Guardian, Crawler, Xenite, serta indikator energi mempunyai idle motion, gait, alert pulse, stun feedback, dan secondary animation yang tetap ringan untuk GPU mobile.
+- Threat ring di bawah musuh mengkomunikasikan kondisi memburu atau lumpuh langsung di dunia, tanpa menambah kepadatan HUD.
+- Layout dialog khusus portrait dan landscape pendek menjaga teks, tombol, notch, dan home indicator tetap aman pada Safari iOS serta browser Android.
+- Cache PWA v4 memaksa pembaruan shell sehingga aset dan runtime Living Mars tidak tertahan oleh service worker rilis lama.
+
 ## Release 2.0 — Forge Asset Pack
 
 - Sepuluh aset GLB orisinal dibuat melalui pipeline Blender 5.2: NIX, ARI, Guardian Drone, Mars Crawler, signal beacon, frontier outpost, crash portal, Xenite cluster, formasi batu, dan wrecked shuttle.

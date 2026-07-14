@@ -981,6 +981,207 @@ a:focus-visible {
   transform: translate(-50%, 0);
 }
 
+/* ARI transmission */
+
+.dialogue-panel {
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  overflow: hidden;
+  pointer-events: auto;
+  background:
+    linear-gradient(90deg, rgba(4, 7, 8, 0.92), rgba(5, 9, 10, 0.7) 48%, rgba(5, 8, 9, 0.18) 78%),
+    linear-gradient(0deg, rgba(4, 6, 7, 0.7), transparent 58%);
+}
+
+.dialogue-shell {
+  position: absolute;
+  bottom: max(1.5rem, env(safe-area-inset-bottom));
+  left: max(1.5rem, env(safe-area-inset-left));
+  display: grid;
+  grid-template-columns: 7.4rem minmax(0, 1fr);
+  width: min(45rem, calc(100% - 3rem));
+  min-height: 18rem;
+  overflow: hidden;
+  border-top: 1px solid rgba(161, 255, 245, 0.72);
+  border-right: 1px solid rgba(161, 255, 245, 0.18);
+  background: rgba(7, 12, 13, 0.93);
+  box-shadow: 0 2rem 5rem rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transform: translateY(2.2rem);
+  transition: opacity 220ms ease, transform 380ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.dialogue-shell::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -22%;
+  width: 18%;
+  content: "";
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(70, 246, 230, 0.07), transparent);
+  animation: dialogue-scan 3.4s 500ms ease-in-out infinite;
+}
+
+.dialogue-panel.is-visible .dialogue-shell {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.dialogue-identity {
+  position: relative;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.65rem;
+  overflow: hidden;
+  border-right: 1px solid rgba(161, 255, 245, 0.13);
+  background:
+    radial-gradient(circle at 50% 44%, rgba(70, 246, 230, 0.2), transparent 42%),
+    rgba(13, 25, 26, 0.72);
+}
+
+.dialogue-identity::before,
+.dialogue-identity::after {
+  position: absolute;
+  content: "";
+  border: 1px solid rgba(161, 255, 245, 0.22);
+  border-radius: 50%;
+}
+
+.dialogue-identity::before {
+  width: 5.4rem;
+  height: 5.4rem;
+}
+
+.dialogue-identity::after {
+  width: 4.1rem;
+  height: 4.1rem;
+  border-style: dashed;
+  animation: spin 9s linear infinite;
+}
+
+.dialogue-identity span {
+  z-index: 1;
+  color: var(--cyan-soft);
+  font-size: 1.05rem;
+  font-weight: 850;
+  letter-spacing: 0.18em;
+}
+
+.dialogue-identity i {
+  z-index: 1;
+  width: 1px;
+  height: 2.3rem;
+  background: linear-gradient(var(--cyan), transparent);
+}
+
+.dialogue-identity small {
+  color: rgba(255, 255, 255, 0.32);
+  font: 600 0.54rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.18em;
+}
+
+.dialogue-copy {
+  align-self: center;
+  padding: 2rem 3.5rem 1.7rem 2.2rem;
+}
+
+.dialogue-copy h2 {
+  max-width: 28rem;
+  margin: 0.55rem 0 0.75rem;
+  color: #f4f4ef;
+  font-size: clamp(1.65rem, 3vw, 2.55rem);
+  font-weight: 680;
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+}
+
+.dialogue-copy > p:not(.eyebrow) {
+  max-width: 32rem;
+  margin: 0;
+  color: rgba(238, 240, 235, 0.68);
+  font-size: 0.82rem;
+  line-height: 1.65;
+}
+
+.dialogue-objective {
+  display: grid;
+  grid-template-columns: 5.2rem 1fr;
+  gap: 0.85rem;
+  max-width: 34rem;
+  margin-top: 1.25rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid rgba(161, 255, 245, 0.14);
+}
+
+.dialogue-objective span {
+  color: rgba(161, 255, 245, 0.48);
+  font-size: 0.52rem;
+  font-weight: 750;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.dialogue-objective strong {
+  color: var(--cyan-soft);
+  font-size: 0.68rem;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.dialogue-continue {
+  display: inline-flex;
+  align-items: center;
+  gap: 1.5rem;
+  min-height: 2.7rem;
+  margin-top: 1.25rem;
+  padding: 0 0 0.35rem;
+  border-bottom: 1px solid rgba(161, 255, 245, 0.48);
+  background: transparent;
+  color: #f4fffd;
+  font-size: 0.59rem;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.dialogue-continue svg {
+  width: 1.1rem;
+  fill: none;
+  stroke: var(--cyan);
+  stroke-width: 1.7;
+  transition: transform 160ms ease;
+}
+
+.dialogue-continue:hover svg,
+.dialogue-continue:active svg {
+  transform: translateX(0.3rem);
+}
+
+.dialogue-close {
+  position: absolute;
+  top: 0.65rem;
+  right: 0.75rem;
+  z-index: 2;
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 1.4rem;
+  place-items: center;
+}
+
+.is-dialogue .joystick-zone,
+.is-dialogue .action-cluster,
+.is-dialogue .interact-button,
+.is-dialogue .rotate-hint {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* Damage, respawn, pause, win */
 
 .damage-flash {
@@ -1238,6 +1439,11 @@ a:focus-visible {
   to { transform: translateX(330%); }
 }
 
+@keyframes dialogue-scan {
+  from { transform: translateX(0); }
+  to { transform: translateX(680%); }
+}
+
 @keyframes damage-pulse {
   0% { opacity: 0; }
   18% { opacity: 1; }
@@ -1334,6 +1540,44 @@ a:focus-visible {
 }
 
 @media (orientation: portrait) and (max-width: 900px) {
+  .dialogue-panel {
+    background:
+      linear-gradient(0deg, rgba(5, 8, 10, 0.98), rgba(5, 8, 10, 0.82) 66%, rgba(5, 8, 10, 0.28));
+  }
+
+  .dialogue-shell {
+    right: max(1rem, env(safe-area-inset-right));
+    bottom: max(1rem, env(safe-area-inset-bottom));
+    left: max(1rem, env(safe-area-inset-left));
+    grid-template-columns: 1fr;
+    width: auto;
+    min-height: 0;
+    max-height: calc(100dvh - 2rem);
+    overflow-y: auto;
+  }
+
+  .dialogue-identity {
+    display: none;
+  }
+
+  .dialogue-copy {
+    padding: 1.5rem 1.25rem 1.25rem;
+  }
+
+  .dialogue-copy h2 {
+    padding-right: 2rem;
+    font-size: clamp(1.55rem, 7vw, 2.15rem);
+  }
+
+  .dialogue-copy > p:not(.eyebrow) {
+    font-size: 0.78rem;
+  }
+
+  .dialogue-objective {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+
   .is-playing .rotate-hint {
     display: flex;
     top: max(5.6rem, calc(env(safe-area-inset-top) + 4.2rem));
@@ -1544,6 +1788,54 @@ a:focus-visible {
 
   .win-stats {
     margin-bottom: 1rem;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .dialogue-shell {
+    bottom: max(0.75rem, env(safe-area-inset-bottom));
+    left: max(1rem, env(safe-area-inset-left));
+    grid-template-columns: 5.2rem 1fr;
+    width: min(42rem, calc(100% - 2rem));
+    min-height: 0;
+  }
+
+  .dialogue-copy {
+    padding: 1rem 3rem 0.85rem 1.35rem;
+  }
+
+  .dialogue-copy h2 {
+    margin: 0.35rem 0 0.45rem;
+    font-size: clamp(1.35rem, 6vh, 2rem);
+  }
+
+  .dialogue-copy > p:not(.eyebrow) {
+    font-size: 0.7rem;
+    line-height: 1.45;
+  }
+
+  .dialogue-objective {
+    margin-top: 0.7rem;
+    padding-top: 0.55rem;
+  }
+
+  .dialogue-continue {
+    min-height: 2.2rem;
+    margin-top: 0.65rem;
+  }
+
+  .dialogue-identity::before {
+    width: 3.8rem;
+    height: 3.8rem;
+  }
+
+  .dialogue-identity::after {
+    width: 3rem;
+    height: 3rem;
+  }
+
+  .dialogue-identity i {
+    height: 1.4rem;
   }
 }
 

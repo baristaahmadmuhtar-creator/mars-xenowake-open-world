@@ -69,10 +69,18 @@ export interface WinStats {
   damageTaken: number;
 }
 
+export interface DialogueState {
+  speaker: string;
+  title: string;
+  body: string;
+  objective: string;
+}
+
 export interface GameCallbacks {
   onHud: (state: HudState) => void;
   onToast: (message: string, tone?: 'normal' | 'warning' | 'success') => void;
   onInteract: (label: string | null, enabled: boolean) => void;
+  onDialogue: (dialogue: DialogueState | null) => void;
   onDamage: () => void;
   onRespawn: () => void;
   onWin: (stats: WinStats) => void;
@@ -104,6 +112,9 @@ interface Drone {
   fallback: THREE.Group;
   home: THREE.Vector3;
   coreMaterial: THREE.MeshStandardMaterial;
+  alertMaterial: THREE.MeshBasicMaterial;
+  alertRing: THREE.Mesh;
+  visual: THREE.Group | null;
   kind: 'guardian' | 'crawler';
   hoverHeight: number;
   orbit: number;
@@ -124,7 +135,7 @@ interface Portal {
   active: boolean;
 }
 
-type Phase = 'menu' | 'playing' | 'paused' | 'won';
+type Phase = 'menu' | 'playing' | 'dialogue' | 'paused' | 'won';
 
 function terrainHeight(x: number, z: number): number {
   const broad = Math.sin(x * 0.049) * 1.15 + Math.cos(z * 0.043) * 0.9;
@@ -177,6 +188,7 @@ export class XenowakeGame {
   private readonly drones: Drone[] = [];
   private readonly npc = new THREE.Group();
   private readonly npcFallback = new THREE.Group();
+  private readonly npcMarker = new THREE.Group();
   private npcVisual: THREE.Group | null = null;
   private readonly crashSite = new THREE.Group();
   private readonly crashFallback = new THREE.Group();
@@ -335,6 +347,15 @@ export class XenowakeGame {
       return;
     }
     if (!paused && this.phase === 'paused') void this.resume();
+  }
+
+  public closeDialogue(): void {
+    if (this.phase !== 'dialogue') return;
+    this.phase = 'playing';
+    this.previousFrame = performance.now();
+    this.accumulator = 0;
+    this.callbacks.onDialogue(null);
+    this.updateInteraction(true);
   }
 
   public setMuted(muted: boolean): void {
@@ -667,6 +688,22 @@ export class XenowakeGame {
     face.scale.set(1, 0.72, 0.25);
     this.npcFallback.add(torso, head, face);
     this.npc.add(this.npcFallback);
+    const markerMaterial = new THREE.MeshStandardMaterial({
+      color: 0xa8fff6,
+      emissive: CYAN,
+      emissiveIntensity: 3.4,
+      roughness: 0.18,
+      metalness: 0.32,
+    });
+    const markerCore = new THREE.Mesh(new THREE.OctahedronGeometry(0.13, 0), markerMaterial);
+    const markerHalo = new THREE.Mesh(
+      new THREE.TorusGeometry(0.34, 0.025, 5, 24),
+      new THREE.MeshBasicMaterial({ color: CYAN, transparent: true, opacity: 0.62, depthWrite: false }),
+    );
+    markerHalo.rotation.x = Math.PI / 2;
+    this.npcMarker.position.y = 3.55;
+    this.npcMarker.add(markerCore, markerHalo);
+    this.npc.add(this.npcMarker);
     this.scene.add(this.npc);
   }
 
@@ -912,6 +949,22 @@ export class XenowakeGame {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(0.17, 8, 5), new THREE.MeshBasicMaterial({ color: 0xff5038 }));
       eye.position.z = -0.56;
       fallback.add(eye);
+      const alertMaterial = new THREE.MeshBasicMaterial({
+        color: 0xff5f45,
+        transparent: true,
+        opacity: 0,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const alertRadius = kind === 'guardian' ? 1.35 : 1.62;
+      const alertRing = new THREE.Mesh(
+        new THREE.RingGeometry(alertRadius, alertRadius + 0.13, 28),
+        alertMaterial,
+      );
+      alertRing.rotation.x = -Math.PI / 2;
+      alertRing.position.y = -hoverHeight + 0.07;
+      group.add(alertRing);
       const y = terrainHeight(layout.x, layout.z) + hoverHeight;
       group.position.set(layout.x, y, layout.z);
       const home = new THREE.Vector3(layout.x, 0, layout.z);
@@ -923,6 +976,9 @@ export class XenowakeGame {
         fallback,
         home,
         coreMaterial,
+        alertMaterial,
+        alertRing,
+        visual: null,
         kind,
         hoverHeight,
         orbit: index * 1.7,
@@ -962,7 +1018,7 @@ export class XenowakeGame {
     }
     for (const drone of this.drones) {
       const asset: AssetName = drone.kind === 'guardian' ? 'guardian-drone' : 'mars-crawler';
-      this.attachDetail(asset, drone.group, drone.fallback, {
+      drone.visual = this.attachDetail(asset, drone.group, drone.fallback, {
         scale: drone.kind === 'guardian' ? 0.92 : 0.76,
       });
     }
@@ -1079,6 +1135,13 @@ export class XenowakeGame {
       drone.chaseTimer = 0;
       drone.alert = false;
       drone.coreMaterial.emissive.setHex(0xc03224);
+      drone.alertMaterial.color.setHex(0xff5f45);
+      drone.alertMaterial.opacity = 0;
+      drone.alertRing.scale.setScalar(1);
+      if (drone.visual) {
+        drone.visual.position.set(0, 0, 0);
+        drone.visual.rotation.set(0, 0, 0);
+      }
       drone.group.visible = index < 2;
     }
     this.portal.active = false;
@@ -1089,6 +1152,7 @@ export class XenowakeGame {
     this.portal.light.intensity = 0;
     this.pulseRing.visible = false;
     this.phase = 'menu';
+    this.callbacks.onDialogue(null);
     this.audio.setIntensity(0);
     this.updateInteraction(true);
     this.emitHud();
@@ -1101,9 +1165,12 @@ export class XenowakeGame {
     this.previousFrame = time;
     const delta = Math.min(rawDelta, 0.05);
 
-    if (this.input.isPausePressed() && this.phase === 'playing') {
-      this.setPaused(true);
-      this.callbacks.onPauseRequest();
+    if (this.input.isPausePressed()) {
+      if (this.phase === 'dialogue') this.closeDialogue();
+      else if (this.phase === 'playing') {
+        this.setPaused(true);
+        this.callbacks.onPauseRequest();
+      }
     }
 
     if (this.phase === 'playing') {
@@ -1228,6 +1295,7 @@ export class XenowakeGame {
     }
     if (this.playerVisual) {
       const bob = moving ? Math.abs(Math.sin(this.walkCycle)) * 0.055 : Math.sin(this.elapsed * 1.8) * 0.018;
+      const breath = Math.sin(this.elapsed * 2.1) * 0.005;
       this.playerVisual.position.y = damp(this.playerVisual.position.y, bob, 13, delta);
       this.playerVisual.rotation.z = damp(
         this.playerVisual.rotation.z,
@@ -1235,6 +1303,13 @@ export class XenowakeGame {
         10,
         delta,
       );
+      this.playerVisual.rotation.x = damp(
+        this.playerVisual.rotation.x,
+        this.dashTimer > 0 ? 0.13 : 0,
+        12,
+        delta,
+      );
+      this.playerVisual.scale.set(0.96 * (1 - breath), 0.96 * (1 + breath), 0.96 * (1 - breath));
     }
   }
 
@@ -1304,6 +1379,25 @@ export class XenowakeGame {
         * (drone.kind === 'guardian' ? 0.28 : 0.045);
       drone.group.position.y = terrainHeight(drone.group.position.x, drone.group.position.z) + hover;
       drone.group.rotation.x = drone.kind === 'guardian' ? Math.sin(this.elapsed * 2 + index) * 0.04 : 0;
+      const ringTarget = drone.stunned > 0 ? 0.76 : drone.alert ? 0.58 : 0;
+      drone.alertMaterial.opacity = damp(drone.alertMaterial.opacity, ringTarget, 12, delta);
+      drone.alertMaterial.color.setHex(drone.stunned > 0 ? CYAN : 0xff5f45);
+      drone.alertRing.rotation.z += delta * (drone.stunned > 0 ? -2.4 : 1.15);
+      drone.alertRing.scale.setScalar(1 + Math.sin(this.elapsed * 5.2 + index) * 0.07);
+      if (drone.visual) {
+        const baseScale = drone.kind === 'guardian' ? 0.92 : 0.76;
+        if (drone.kind === 'guardian') {
+          drone.visual.rotation.y += delta * (drone.alert ? 1.85 : 0.62);
+          drone.visual.position.y = Math.sin(this.elapsed * 3.2 + index) * 0.055;
+          const energyScale = 1 + Math.sin(this.elapsed * 4.6 + index) * 0.012;
+          drone.visual.scale.setScalar(baseScale * energyScale);
+        } else {
+          const gait = Math.sin(this.elapsed * (drone.alert ? 10 : 5.5) + index);
+          drone.visual.position.y = Math.abs(gait) * 0.035;
+          drone.visual.rotation.z = gait * 0.018;
+          drone.visual.scale.setScalar(baseScale);
+        }
+      }
     }
   }
 
@@ -1381,12 +1475,29 @@ export class XenowakeGame {
       return;
     }
     if (this.currentInteraction === 'npc') {
-      const briefing = this.beaconsActive === 0
-        ? 'ARI: Cari Xenite cyan. Satu kristal menyalakan satu menara.'
+      const dialogue: DialogueState = this.beaconsActive === 0
+        ? {
+            speaker: 'ARI / FRONTIER SCOUT',
+            title: 'Jaringan ini mengenalmu.',
+            body: 'Menara tua itu merespons inti di punggungmu. Xenite adalah kuncinya—dan para penjaga akan merasakan setiap node yang bangun.',
+            objective: 'Serap kristal cyan. Satu Xenite menyalakan satu menara.',
+          }
         : this.beaconsActive < 3
-          ? `ARI: ${3 - this.beaconsActive} menara tersisa. Pulse bisa melumpuhkan penjaga.`
-          : 'ARI: Jaringan stabil. Portal di Crash Basin siap membawamu pulang.';
-      this.callbacks.onToast(briefing, 'normal');
+          ? {
+              speaker: 'ARI / FRONTIER SCOUT',
+              title: 'Mereka mulai beradaptasi.',
+              body: `Masih ada ${3 - this.beaconsActive} node. Guardian menyerang dari udara; Crawler menjaga jalur darat. Pulse menghentikan keduanya untuk beberapa detik.`,
+              objective: `Aktifkan ${3 - this.beaconsActive} menara tersisa, lalu kembali ke Crash Basin.`,
+            }
+          : {
+              speaker: 'ARI / FRONTIER SCOUT',
+              title: 'Frekuensi rumahmu terbuka.',
+              body: 'Ketiga node sudah sinkron. Cincin di basin kini stabil, tetapi gelombang terakhir memanggil semua penjaga yang tersisa.',
+              objective: 'Masuki portal di Crash Basin dan selesaikan transmisi.',
+            };
+      this.phase = 'dialogue';
+      this.callbacks.onInteract(null, false);
+      this.callbacks.onDialogue(dialogue);
       this.audio.play('activate');
       if (navigator.vibrate) navigator.vibrate(12);
       return;
@@ -1492,10 +1603,18 @@ export class XenowakeGame {
   }
 
   private updateAmbient(delta: number, time: number): void {
+    const npcDx = this.player.position.x - this.npc.position.x;
+    const npcDz = this.player.position.z - this.npc.position.z;
+    if (npcDx * npcDx + npcDz * npcDz < 11 * 11) {
+      this.npc.rotation.y = angleDamp(this.npc.rotation.y, Math.atan2(npcDx, npcDz), 3.8, delta);
+    }
     if (this.npcVisual) {
       this.npcVisual.position.y = Math.sin(time * 1.7) * 0.018;
       this.npcVisual.rotation.z = Math.sin(time * 0.72) * 0.008;
     }
+    this.npcMarker.rotation.y += delta * 1.35;
+    this.npcMarker.position.y = 3.55 + Math.sin(time * 2.5) * 0.12;
+    this.npcMarker.scale.setScalar(0.94 + Math.sin(time * 3.1) * 0.08);
     for (let index = 0; index < this.beacons.length; index += 1) {
       const beacon = this.beacons[index];
       beacon.group.rotation.y = Math.sin(time * 0.14 + index) * 0.012;
@@ -1508,6 +1627,7 @@ export class XenowakeGame {
       if (xenite.collected) continue;
       xenite.group.position.y = xenite.baseY + Math.sin(time * 2.2 + index) * 0.24;
       xenite.group.rotation.y += delta * 0.85;
+      xenite.group.scale.setScalar(1 + Math.sin(time * 3.4 + index) * 0.035);
     }
     if (this.portal.active) {
       this.portal.ring.rotation.z += delta * 0.18;
