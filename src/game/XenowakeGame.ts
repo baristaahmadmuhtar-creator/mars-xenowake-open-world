@@ -135,6 +135,24 @@ interface Portal {
   active: boolean;
 }
 
+interface FootPuff {
+  mesh: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
+  age: number;
+  life: number;
+}
+
+interface DustCloud {
+  sprite: THREE.Sprite;
+  speed: number;
+  drift: number;
+}
+
+interface DetailMotionUniforms {
+  time: { value: number };
+  gait: { value: number };
+  dash: { value: number };
+}
+
 type Phase = 'menu' | 'playing' | 'dialogue' | 'paused' | 'won';
 
 function terrainHeight(x: number, z: number): number {
@@ -166,6 +184,144 @@ function angleDamp(current: number, target: number, lambda: number, delta: numbe
   return current + difference * (1 - Math.exp(-lambda * delta));
 }
 
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  const x = THREE.MathUtils.clamp((value - edge0) / (edge1 - edge0), 0, 1);
+  return x * x * (3 - 2 * x);
+}
+
+function hash2(x: number, y: number): number {
+  return THREE.MathUtils.euclideanModulo(Math.sin(x * 127.1 + y * 311.7) * 43758.5453123, 1);
+}
+
+function valueNoise2(x: number, y: number): number {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const xf = x - xi;
+  const yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf);
+  const v = yf * yf * (3 - 2 * yf);
+  const a = hash2(xi, yi);
+  const b = hash2(xi + 1, yi);
+  const c = hash2(xi, yi + 1);
+  const d = hash2(xi + 1, yi + 1);
+  return THREE.MathUtils.lerp(THREE.MathUtils.lerp(a, b, u), THREE.MathUtils.lerp(c, d, u), v);
+}
+
+function fbm2(x: number, y: number): number {
+  let total = 0;
+  let amplitude = 0.55;
+  let frequency = 1;
+  let normalizer = 0;
+  for (let octave = 0; octave < 5; octave += 1) {
+    total += valueNoise2(x * frequency, y * frequency) * amplitude;
+    normalizer += amplitude;
+    amplitude *= 0.52;
+    frequency *= 2.03;
+  }
+  return total / normalizer;
+}
+
+function marsSurfaceHeight(x: number, y: number): number {
+  const grain = fbm2(x * 0.075, y * 0.075);
+  const ridges = Math.abs(Math.sin(x * 0.17 + fbm2(x * 0.035, y * 0.04) * 5.8));
+  const fractures = smoothstep(0.7, 0.96, fbm2(x * 0.22 + 9.4, y * 0.2 - 4.1));
+  return grain * 0.56 + ridges * 0.26 + fractures * 0.18;
+}
+
+function makeCanvasTexture(
+  size: number,
+  paint: (data: Uint8ClampedArray, width: number, height: number) => void,
+): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext('2d');
+  if (!context) return new THREE.CanvasTexture(canvas);
+  const image = context.createImageData(size, size);
+  paint(image.data, size, size);
+  context.putImageData(image, 0, 0);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(15, 15);
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function createMarsAlbedoTexture(): THREE.CanvasTexture {
+  const dark = new THREE.Color(0x4a1610);
+  const rust = new THREE.Color(0x8c3320);
+  const dust = new THREE.Color(0xc86a38);
+  const ochre = new THREE.Color(0x7c4a2b);
+  const color = new THREE.Color();
+  const size = 512;
+  const texture = makeCanvasTexture(size, (data, width, height) => {
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const wx = (x / width) * 128;
+        const wy = (y / height) * 128;
+        const heightField = marsSurfaceHeight(wx, wy);
+        const dune = 0.5 + Math.sin(wx * 0.42 + Math.sin(wy * 0.09) * 2.2) * 0.5;
+        const crack = smoothstep(0.82, 0.96, fbm2(wx * 0.24 + 18, wy * 0.24));
+        color.copy(dark).lerp(rust, 0.55 + heightField * 0.35).lerp(dust, dune * 0.22);
+        if (crack > 0.08) color.lerp(ochre, crack * 0.42);
+        const index = (y * width + x) * 4;
+        data[index] = Math.round(color.r * 255);
+        data[index + 1] = Math.round(color.g * 255);
+        data[index + 2] = Math.round(color.b * 255);
+        data[index + 3] = 255;
+      }
+    }
+  });
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createMarsNormalTexture(): THREE.CanvasTexture {
+  const size = 512;
+  return makeCanvasTexture(size, (data, width, height) => {
+    const scale = 3.2;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const wx = (x / width) * 128;
+        const wy = (y / height) * 128;
+        const left = marsSurfaceHeight(wx - 0.45, wy);
+        const right = marsSurfaceHeight(wx + 0.45, wy);
+        const down = marsSurfaceHeight(wx, wy - 0.45);
+        const up = marsSurfaceHeight(wx, wy + 0.45);
+        const nx = (left - right) * scale;
+        const ny = (down - up) * scale;
+        const nz = 1;
+        const length = Math.hypot(nx, ny, nz) || 1;
+        const index = (y * width + x) * 4;
+        data[index] = Math.round(((nx / length) * 0.5 + 0.5) * 255);
+        data[index + 1] = Math.round(((ny / length) * 0.5 + 0.5) * 255);
+        data[index + 2] = Math.round(((nz / length) * 0.5 + 0.5) * 255);
+        data[index + 3] = 255;
+      }
+    }
+  });
+}
+
+function createSoftDustTexture(): THREE.CanvasTexture {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext('2d');
+  if (context) {
+    const gradient = context.createRadialGradient(64, 64, 5, 64, 64, 64);
+    gradient.addColorStop(0, 'rgba(255, 191, 123, 0.42)');
+    gradient.addColorStop(0.45, 'rgba(219, 94, 45, 0.16)');
+    gradient.addColorStop(1, 'rgba(219, 94, 45, 0)');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, size, size);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
 export class XenowakeGame {
   public readonly isSupported: boolean;
 
@@ -195,6 +351,16 @@ export class XenowakeGame {
   private readonly outpost = new THREE.Group();
   private readonly outpostFallback = new THREE.Group();
   private dust: THREE.Points | null = null;
+  private readonly dustClouds: DustCloud[] = [];
+  private readonly footPuffs: FootPuff[] = [];
+  private footPuffCursor = 0;
+  private footstepDistance = 0;
+  private readonly lastStepPosition = new THREE.Vector3();
+  private readonly playerLight = new THREE.PointLight(CYAN, 1.35, 9.5, 2);
+  private readonly dashTrail = new THREE.Group();
+  private dashTrailMaterial: THREE.MeshBasicMaterial | null = null;
+  private playerMotionUniforms: DetailMotionUniforms | null = null;
+  private npcMotionUniforms: DetailMotionUniforms | null = null;
   private readonly velocity = new THREE.Vector3();
   private readonly movement = new THREE.Vector3();
   private readonly forward = new THREE.Vector3();
@@ -301,13 +467,13 @@ export class XenowakeGame {
     if (renderer) {
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 0.92;
+      renderer.toneMappingExposure = 1.08;
       renderer.shadowMap.enabled = quality === 'high';
-      renderer.shadowMap.type = THREE.PCFShadowMap;
-      renderer.setClearColor(0x160a08, 1);
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.setClearColor(0x12080a, 1);
 
-      this.scene.background = new THREE.Color(0x160a08);
-      this.scene.fog = new THREE.FogExp2(0x733326, quality === 'high' ? 0.0082 : 0.011);
+      this.scene.background = new THREE.Color(0x12080a);
+      this.scene.fog = new THREE.FogExp2(0x703026, quality === 'high' ? 0.0069 : 0.0094);
       this.buildScene();
       this.setQuality(quality);
       this.resize();
@@ -374,7 +540,7 @@ export class XenowakeGame {
     const ratio = quality === 'high' ? 1.5 : 1;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, ratio));
     if (this.scene.fog instanceof THREE.FogExp2) {
-      this.scene.fog.density = quality === 'high' ? 0.0082 : 0.011;
+      this.scene.fog.density = quality === 'high' ? 0.0069 : 0.0094;
     }
     this.renderer.shadowMap.enabled = quality === 'high';
     if (this.dust) this.dust.visible = quality === 'high';
@@ -402,9 +568,9 @@ export class XenowakeGame {
   private buildScene(): void {
     this.createSky();
 
-    const hemisphere = new THREE.HemisphereLight(0xffc09b, 0x210b16, 1.7);
+    const hemisphere = new THREE.HemisphereLight(0xffc09b, 0x3a1712, 1.32);
     this.scene.add(hemisphere);
-    const sunLight = new THREE.DirectionalLight(0xffd0a0, 2.45);
+    const sunLight = new THREE.DirectionalLight(0xffd0a0, 3.05);
     sunLight.position.set(-55, 80, -38);
     sunLight.castShadow = true;
     sunLight.shadow.mapSize.set(1024, 1024);
@@ -416,11 +582,16 @@ export class XenowakeGame {
     sunLight.shadow.camera.bottom = -92;
     sunLight.shadow.bias = -0.0007;
     this.scene.add(sunLight);
-    const cyanFill = new THREE.DirectionalLight(0x5efbe9, 0.34);
+    const cyanFill = new THREE.DirectionalLight(0x5efbe9, 0.58);
     cyanFill.position.set(40, 18, 50);
     this.scene.add(cyanFill);
+    const coldRim = new THREE.DirectionalLight(0x9ae7ff, 0.28);
+    coldRim.position.set(24, 34, -70);
+    this.scene.add(coldRim);
+    this.scene.add(new THREE.AmbientLight(0x3a1a18, 0.26));
 
     this.createTerrain();
+    this.createSurfaceScars();
     this.createRocks();
     this.createDecorativeCrystals();
     this.createCrashSite();
@@ -430,6 +601,7 @@ export class XenowakeGame {
     this.createDrones();
     this.createPlayer();
     this.createDust();
+    this.createDustClouds();
     this.scene.add(this.pulseRing);
   }
 
@@ -500,7 +672,7 @@ export class XenowakeGame {
   }
 
   private createTerrain(): void {
-    const segments = this.quality === 'high' ? 64 : 44;
+    const segments = this.quality === 'high' ? 96 : 60;
     const geometry = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, segments, segments);
     geometry.rotateX(-Math.PI / 2);
     const positions = geometry.getAttribute('position') as THREE.BufferAttribute;
@@ -514,29 +686,82 @@ export class XenowakeGame {
       const z = positions.getZ(index);
       const y = terrainHeight(x, z);
       positions.setY(index, y);
-      const variation = Math.sin(x * 0.4 + z * 0.27) * 0.05;
-      color.copy(mid).lerp(y > 3 ? high : low, Math.min(0.5, Math.abs(y) * 0.065 + 0.16 + variation));
+      const variation = fbm2(x * 0.08 + 12, z * 0.08 - 4) * 0.18 + Math.sin(x * 0.4 + z * 0.27) * 0.04;
+      color.copy(mid).lerp(y > 3 ? high : low, Math.min(0.62, Math.abs(y) * 0.06 + 0.12 + variation));
       colors[index * 3] = color.r;
       colors[index * 3 + 1] = color.g;
       colors[index * 3 + 2] = color.b;
     }
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.computeVertexNormals();
+    const albedo = createMarsAlbedoTexture();
+    const normal = createMarsNormalTexture();
+    const anisotropy = Math.min(4, this.renderer?.capabilities.getMaxAnisotropy() ?? 1);
+    albedo.anisotropy = anisotropy;
+    normal.anisotropy = anisotropy;
     const material = new THREE.MeshStandardMaterial({
+      map: albedo,
+      normalMap: normal,
+      normalScale: new THREE.Vector2(0.62, 0.62),
       vertexColors: true,
-      roughness: 0.98,
-      metalness: 0.02,
-      flatShading: true,
+      roughness: 0.94,
+      metalness: 0.01,
     });
     const terrain = new THREE.Mesh(geometry, material);
     terrain.receiveShadow = true;
     this.scene.add(terrain);
   }
 
+  private createSurfaceScars(): void {
+    const random = mulberry32(67012);
+    const craterMaterial = new THREE.MeshBasicMaterial({
+      color: 0x250907,
+      transparent: true,
+      opacity: 0.24,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const fractureMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffb47c,
+      transparent: true,
+      opacity: 0.09,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+
+    for (let index = 0; index < 30; index += 1) {
+      const angle = random() * Math.PI * 2;
+      const radius = 8 + Math.sqrt(random()) * 72;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      if (Math.hypot(x, z - 10) < 10) continue;
+      const crater = new THREE.Mesh(new THREE.RingGeometry(0.72, 1, 42), craterMaterial);
+      const size = 2.2 + random() * 6.8;
+      crater.position.set(x, terrainHeight(x, z) + 0.045, z);
+      crater.rotation.x = -Math.PI / 2;
+      crater.rotation.z = random() * Math.PI;
+      crater.scale.set(size * (0.7 + random() * 0.55), size * (0.36 + random() * 0.34), 1);
+      this.scene.add(crater);
+    }
+
+    for (let index = 0; index < 46; index += 1) {
+      const angle = random() * Math.PI * 2;
+      const radius = 14 + Math.sqrt(random()) * 70;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      const scar = new THREE.Mesh(new THREE.PlaneGeometry(0.08 + random() * 0.11, 3.8 + random() * 7.5), fractureMaterial);
+      scar.position.set(x, terrainHeight(x, z) + 0.055, z);
+      scar.rotation.x = -Math.PI / 2;
+      scar.rotation.z = random() * Math.PI;
+      this.scene.add(scar);
+    }
+  }
+
   private createRocks(): void {
     const random = mulberry32(44192);
-    const count = this.quality === 'high' ? 185 : 120;
-    const geometry = new THREE.DodecahedronGeometry(1, 0);
+    const count = this.quality === 'high' ? 235 : 150;
+    const geometry = new THREE.DodecahedronGeometry(1, 1);
     geometry.scale(1, 1.3, 0.9);
     const material = new THREE.MeshStandardMaterial({
       color: 0x6c2b22,
@@ -772,6 +997,36 @@ export class XenowakeGame {
     const pack = new THREE.Mesh(new THREE.OctahedronGeometry(0.34, 0), packMaterial);
     pack.position.set(0, 1.62, 0.48);
     this.playerFallback.add(pack);
+    this.playerLight.position.set(0, 1.62, 0.52);
+    this.player.add(this.playerLight);
+
+    this.dashTrailMaterial = new THREE.MeshBasicMaterial({
+      color: CYAN,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    const dashGeometry = new THREE.BufferGeometry();
+    dashGeometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute([
+        -0.34, 0, 0,
+        0.34, 0, 0,
+        0, 0, 1.95,
+      ], 3),
+    );
+    dashGeometry.computeVertexNormals();
+    for (let index = 0; index < 3; index += 1) {
+      const trail = new THREE.Mesh(dashGeometry, this.dashTrailMaterial);
+      trail.position.set((index - 1) * 0.23, 1.05 + index * 0.11, 0.72 + index * 0.34);
+      trail.rotation.x = -0.22;
+      trail.scale.setScalar(1 - index * 0.14);
+      this.dashTrail.add(trail);
+    }
+    this.dashTrail.visible = false;
+    this.player.add(this.dashTrail);
 
     const shadow = new THREE.Mesh(
       new THREE.CircleGeometry(0.82, 20),
@@ -785,6 +1040,24 @@ export class XenowakeGame {
       if (object instanceof THREE.Mesh && object !== shadow) object.castShadow = true;
     });
     this.scene.add(this.player);
+
+    const puffGeometry = new THREE.CircleGeometry(0.42, 18);
+    for (let index = 0; index < 10; index += 1) {
+      const puff = new THREE.Mesh(
+        puffGeometry,
+        new THREE.MeshBasicMaterial({
+          color: 0xd87543,
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      puff.rotation.x = -Math.PI / 2;
+      puff.visible = false;
+      this.footPuffs.push({ mesh: puff, age: 999, life: 0.8 });
+      this.scene.add(puff);
+    }
   }
 
   private createBeacons(): void {
@@ -996,9 +1269,13 @@ export class XenowakeGame {
 
     this.playerVisual = this.attachDetail('nix-alien', this.player, this.playerFallback, {
       scale: 0.96,
+      cloneMaterials: true,
+      motion: 'player',
     });
     this.npcVisual = this.attachDetail('ari-scout', this.npc, this.npcFallback, {
       scale: 0.96,
+      cloneMaterials: true,
+      motion: 'npc',
     });
     this.attachDetail('frontier-outpost', this.outpost, this.outpostFallback, { scale: 0.82 });
     this.attachDetail('wrecked-shuttle', this.crashSite, this.crashFallback, {
@@ -1051,16 +1328,90 @@ export class XenowakeGame {
     name: AssetName,
     parent: THREE.Group,
     fallback: THREE.Group,
-    options: { scale?: number; x?: number; y?: number; z?: number; rotationY?: number } = {},
+    options: {
+      scale?: number;
+      x?: number;
+      y?: number;
+      z?: number;
+      rotationY?: number;
+      cloneMaterials?: boolean;
+      motion?: 'player' | 'npc';
+    } = {},
   ): THREE.Group | null {
-    const detail = this.assets.instantiate(name);
+    const detail = this.assets.instantiate(name, options.cloneMaterials ?? false);
     if (!detail) return null;
     detail.position.set(options.x ?? 0, options.y ?? 0, options.z ?? 0);
     detail.rotation.y = options.rotationY ?? 0;
     detail.scale.setScalar(options.scale ?? 1);
+    this.polishDetailMaterials(detail);
+    if (options.motion) {
+      const uniforms = this.applyDetailMotion(detail, options.motion);
+      if (options.motion === 'player') this.playerMotionUniforms = uniforms;
+      else this.npcMotionUniforms = uniforms;
+    }
     fallback.visible = false;
     parent.add(detail);
     return detail;
+  }
+
+  private polishDetailMaterials(root: THREE.Object3D): void {
+    root.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (!(material instanceof THREE.MeshStandardMaterial)) continue;
+        material.envMapIntensity = 0.82;
+        material.roughness = THREE.MathUtils.clamp(material.roughness, 0.22, 0.94);
+        material.needsUpdate = true;
+      }
+    });
+  }
+
+  private applyDetailMotion(root: THREE.Object3D, profile: 'player' | 'npc'): DetailMotionUniforms {
+    const uniforms: DetailMotionUniforms = {
+      time: { value: 0 },
+      gait: { value: profile === 'npc' ? 0.18 : 0 },
+      dash: { value: 0 },
+    };
+    const gaitStrength = profile === 'player' ? 0.072 : 0.018;
+    const swayStrength = profile === 'player' ? 0.054 : 0.016;
+    const breathStrength = profile === 'player' ? 0.018 : 0.011;
+
+    root.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (!(material instanceof THREE.MeshStandardMaterial)) continue;
+        material.onBeforeCompile = (shader) => {
+          shader.uniforms.uXenoTime = uniforms.time;
+          shader.uniforms.uXenoGait = uniforms.gait;
+          shader.uniforms.uXenoDash = uniforms.dash;
+          shader.vertexShader = shader.vertexShader
+            .replace(
+              '#include <common>',
+              `#include <common>
+              uniform float uXenoTime;
+              uniform float uXenoGait;
+              uniform float uXenoDash;`,
+            )
+            .replace(
+              '#include <begin_vertex>',
+              `#include <begin_vertex>
+              float bodyMask = smoothstep(0.2, 2.9, transformed.y);
+              float outerMask = smoothstep(0.18, 0.68, abs(transformed.x));
+              float motionMask = clamp(bodyMask * (0.35 + outerMask), 0.0, 1.0);
+              float phase = uXenoTime * (7.2 + uXenoDash * 4.0) + transformed.y * 3.2 + transformed.x * 4.6;
+              transformed.x += sin(phase) * uXenoGait * motionMask * ${swayStrength.toFixed(4)};
+              transformed.z += cos(phase * 0.83) * uXenoGait * motionMask * ${gaitStrength.toFixed(4)};
+              transformed.y += sin(uXenoTime * 2.1 + transformed.x * 1.8) * ${breathStrength.toFixed(4)} * bodyMask;
+              transformed.z += uXenoDash * bodyMask * 0.045;`,
+            );
+        };
+        material.needsUpdate = true;
+      }
+    });
+
+    return uniforms;
   }
 
   private createDust(): void {
@@ -1088,6 +1439,64 @@ export class XenowakeGame {
     this.scene.add(points);
   }
 
+  private createDustClouds(): void {
+    const random = mulberry32(92041);
+    const texture = createSoftDustTexture();
+    for (let index = 0; index < 22; index += 1) {
+      const material = new THREE.SpriteMaterial({
+        map: texture,
+        color: index % 3 === 0 ? 0xffb37a : 0xc86438,
+        transparent: true,
+        opacity: 0.13 + random() * 0.08,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const sprite = new THREE.Sprite(material);
+      const angle = random() * Math.PI * 2;
+      const radius = 35 + random() * 68;
+      sprite.position.set(Math.cos(angle) * radius, 4.4 + random() * 7.8, Math.sin(angle) * radius);
+      const scale = 12 + random() * 28;
+      sprite.scale.set(scale * (1.4 + random() * 1.8), scale * (0.35 + random() * 0.34), 1);
+      this.dustClouds.push({ sprite, speed: 0.45 + random() * 0.9, drift: random() * Math.PI * 2 });
+      this.scene.add(sprite);
+    }
+  }
+
+  private triggerFootPuff(side: number): void {
+    const puff = this.footPuffs[this.footPuffCursor];
+    if (!puff) return;
+    this.footPuffCursor = (this.footPuffCursor + 1) % this.footPuffs.length;
+    const rightX = Math.cos(this.playerHeading);
+    const rightZ = -Math.sin(this.playerHeading);
+    const backX = -Math.sin(this.playerHeading);
+    const backZ = -Math.cos(this.playerHeading);
+    const x = this.player.position.x + rightX * side * 0.34 + backX * 0.26;
+    const z = this.player.position.z + rightZ * side * 0.34 + backZ * 0.26;
+    puff.age = 0;
+    puff.life = this.dashTimer > 0 ? 0.48 : 0.72;
+    puff.mesh.position.set(x, terrainHeight(x, z) + 0.075, z);
+    puff.mesh.rotation.z = this.playerHeading + side * 0.24;
+    puff.mesh.scale.setScalar(this.dashTimer > 0 ? 0.52 : 0.34);
+    puff.mesh.material.opacity = this.dashTimer > 0 ? 0.5 : 0.34;
+    puff.mesh.visible = true;
+  }
+
+  private updateFootPuffs(delta: number): void {
+    for (const puff of this.footPuffs) {
+      if (!puff.mesh.visible) continue;
+      puff.age += delta;
+      const progress = puff.age / puff.life;
+      if (progress >= 1) {
+        puff.mesh.visible = false;
+        puff.mesh.material.opacity = 0;
+        continue;
+      }
+      const spread = 1 + progress * (this.dashTimer > 0 ? 2.2 : 1.35);
+      puff.mesh.scale.setScalar(spread * (this.dashTimer > 0 ? 0.55 : 0.42));
+      puff.mesh.material.opacity = (1 - progress) * 0.28;
+    }
+  }
+
   private resetSession(): void {
     this.elapsed = 0;
     this.performanceWarmupSeconds = 0;
@@ -1105,9 +1514,11 @@ export class XenowakeGame {
     this.invulnerability = 0;
     this.respawnTimer = 0;
     this.boundaryToastCooldown = 0;
+    this.footstepDistance = 0;
     this.velocity.set(0, 0, 0);
     this.spawn.y = terrainHeight(this.spawn.x, this.spawn.z);
     this.player.position.copy(this.spawn);
+    this.lastStepPosition.copy(this.player.position);
     this.player.rotation.y = 0;
     this.playerHeading = 0;
     this.cameraYaw = Math.PI;
@@ -1144,6 +1555,13 @@ export class XenowakeGame {
       }
       drone.group.visible = index < 2;
     }
+    for (const puff of this.footPuffs) {
+      puff.age = 999;
+      puff.mesh.visible = false;
+      puff.mesh.material.opacity = 0;
+    }
+    if (this.dashTrailMaterial) this.dashTrailMaterial.opacity = 0;
+    this.dashTrail.visible = false;
     this.portal.active = false;
     this.portal.ringMaterial.color.setHex(0x202328);
     this.portal.ringMaterial.emissive.setHex(0x102825);
@@ -1268,7 +1686,6 @@ export class XenowakeGame {
     this.velocity.z = damp(this.velocity.z, targetZ, this.dashTimer > 0 ? 18 : 11, delta);
     this.player.position.x += this.velocity.x * delta;
     this.player.position.z += this.velocity.z * delta;
-
     const radius = Math.hypot(this.player.position.x, this.player.position.z);
     if (radius > WORLD_LIMIT) {
       const scale = WORLD_LIMIT / radius;
@@ -1281,6 +1698,20 @@ export class XenowakeGame {
       }
     }
     this.player.position.y = terrainHeight(this.player.position.x, this.player.position.z);
+    const movedDistance = Math.hypot(
+      this.player.position.x - this.lastStepPosition.x,
+      this.player.position.z - this.lastStepPosition.z,
+    );
+    if (moving) {
+      this.footstepDistance += movedDistance;
+      if (this.footstepDistance > (this.dashTimer > 0 ? 0.82 : 1.18)) {
+        this.footstepDistance = 0;
+        this.triggerFootPuff(Math.sin(this.walkCycle) >= 0 ? 1 : -1);
+      }
+    } else {
+      this.footstepDistance = 0;
+    }
+    this.lastStepPosition.copy(this.player.position);
 
     if (moving) {
       const targetHeading = Math.atan2(this.movement.x, this.movement.z);
@@ -1294,22 +1725,37 @@ export class XenowakeGame {
       this.playerLimbs[index].rotation.x = damp(this.playerLimbs[index].rotation.x, stride * direction, 12, delta);
     }
     if (this.playerVisual) {
-      const bob = moving ? Math.abs(Math.sin(this.walkCycle)) * 0.055 : Math.sin(this.elapsed * 1.8) * 0.018;
-      const breath = Math.sin(this.elapsed * 2.1) * 0.005;
+      const speedFactor = Math.min(1, Math.hypot(this.velocity.x, this.velocity.z) / 7.5);
+      const bob = moving ? Math.abs(Math.sin(this.walkCycle)) * (0.08 + speedFactor * 0.055) : Math.sin(this.elapsed * 1.8) * 0.02;
+      const breath = Math.sin(this.elapsed * 2.1) * 0.008;
       this.playerVisual.position.y = damp(this.playerVisual.position.y, bob, 13, delta);
       this.playerVisual.rotation.z = damp(
         this.playerVisual.rotation.z,
-        moving ? -this.input.move.x * 0.055 : 0,
+        moving ? -this.input.move.x * (0.08 + speedFactor * 0.04) : 0,
         10,
         delta,
       );
       this.playerVisual.rotation.x = damp(
         this.playerVisual.rotation.x,
-        this.dashTimer > 0 ? 0.13 : 0,
+        this.dashTimer > 0 ? 0.22 : speedFactor * 0.035,
         12,
         delta,
       );
       this.playerVisual.scale.set(0.96 * (1 - breath), 0.96 * (1 + breath), 0.96 * (1 - breath));
+    }
+    if (this.playerMotionUniforms) {
+      this.playerMotionUniforms.gait.value = damp(
+        this.playerMotionUniforms.gait.value,
+        moving ? Math.min(1, Math.hypot(this.velocity.x, this.velocity.z) / 7) : 0,
+        9,
+        delta,
+      );
+      this.playerMotionUniforms.dash.value = damp(this.playerMotionUniforms.dash.value, this.dashTimer > 0 ? 1 : 0, 10, delta);
+    }
+    this.playerLight.intensity = 1.2 + Math.sin(this.elapsed * 5.4) * 0.18 + (this.dashTimer > 0 ? 1.1 : 0);
+    this.dashTrail.visible = this.dashTimer > 0;
+    if (this.dashTrailMaterial) {
+      this.dashTrailMaterial.opacity = damp(this.dashTrailMaterial.opacity, this.dashTimer > 0 ? 0.62 : 0, 12, delta);
     }
   }
 
@@ -1603,6 +2049,11 @@ export class XenowakeGame {
   }
 
   private updateAmbient(delta: number, time: number): void {
+    if (this.playerMotionUniforms) this.playerMotionUniforms.time.value = time;
+    if (this.npcMotionUniforms) {
+      this.npcMotionUniforms.time.value = time;
+      this.npcMotionUniforms.gait.value = 0.18 + Math.sin(time * 0.8) * 0.04;
+    }
     const npcDx = this.player.position.x - this.npc.position.x;
     const npcDz = this.player.position.z - this.npc.position.z;
     if (npcDx * npcDx + npcDz * npcDz < 11 * 11) {
@@ -1635,13 +2086,25 @@ export class XenowakeGame {
       this.portal.discMaterial.opacity = 0.34 + Math.sin(time * 2.1) * 0.08;
     }
     if (this.dust) this.dust.rotation.y += delta * 0.006;
+    for (let index = 0; index < this.dustClouds.length; index += 1) {
+      const cloud = this.dustClouds[index];
+      cloud.sprite.position.x += Math.cos(cloud.drift) * cloud.speed * delta;
+      cloud.sprite.position.z += Math.sin(cloud.drift) * cloud.speed * delta;
+      cloud.sprite.position.y += Math.sin(time * 0.32 + index) * 0.003;
+      if (Math.hypot(cloud.sprite.position.x, cloud.sprite.position.z) > 96) {
+        cloud.sprite.position.x *= -0.84;
+        cloud.sprite.position.z *= -0.84;
+      }
+    }
+    this.updateFootPuffs(delta);
   }
 
   private updateCamera(delta: number): void {
-    const horizontal = Math.cos(this.cameraPitch) * 9.6;
+    const speedFactor = Math.min(1, Math.hypot(this.velocity.x, this.velocity.z) / 12);
+    const horizontal = Math.cos(this.cameraPitch) * (9.6 + speedFactor * 0.6);
     this.targetCamera.set(
       this.player.position.x + Math.sin(this.cameraYaw) * horizontal,
-      this.player.position.y + 2.7 + Math.sin(this.cameraPitch) * 7.2,
+      this.player.position.y + 2.7 + Math.sin(this.cameraPitch) * 7.2 + Math.sin(this.walkCycle * 0.5) * speedFactor * 0.08,
       this.player.position.z + Math.cos(this.cameraYaw) * horizontal,
     );
     const cameraGround = terrainHeight(this.targetCamera.x, this.targetCamera.z) + 1.1;
@@ -1650,6 +2113,9 @@ export class XenowakeGame {
     this.camera.position.lerp(this.targetCamera, 1 - Math.exp(-follow * Math.max(delta, 0.001)));
     this.cameraLook.set(this.player.position.x, this.player.position.y + 1.65, this.player.position.z);
     this.camera.lookAt(this.cameraLook);
+    const targetFov = this.dashTimer > 0 ? 63 : 58 + speedFactor * 1.2;
+    this.camera.fov = damp(this.camera.fov, targetFov, 8, delta);
+    this.camera.updateProjectionMatrix();
   }
 
   private emitHud(): void {

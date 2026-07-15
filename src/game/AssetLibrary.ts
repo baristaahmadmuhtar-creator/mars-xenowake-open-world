@@ -44,13 +44,18 @@ export class AssetLibrary {
     return this.loading;
   }
 
-  public instantiate(name: AssetName): THREE.Group | null {
+  public instantiate(name: AssetName, cloneMaterials = false): THREE.Group | null {
     const source = this.sources.get(name);
     if (!source) return null;
     const clone = source.clone(true);
     clone.name = `${name}-detail`;
     clone.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
+      if (cloneMaterials) {
+        object.material = Array.isArray(object.material)
+          ? object.material.map((material) => material.clone())
+          : object.material.clone();
+      }
       object.castShadow = true;
       object.receiveShadow = true;
       object.frustumCulled = true;
