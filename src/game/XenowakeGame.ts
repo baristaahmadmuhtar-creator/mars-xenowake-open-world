@@ -12,6 +12,9 @@ const DASH_COOLDOWN = 2.8;
 const CYAN = 0x46f6e6;
 
 const GRAVITY = -30;
+const JUMP_SPEED = 11.5;
+const COYOTE_TIME = 0.12;
+const JUMP_BUFFER = 0.13;
 const NPC_HOME = { x: 3.6, z: 14.2 } as const;
 const NPC_SPEED = 6.1;
 const NPC_STANDOFF = 4.4;
@@ -165,6 +168,83 @@ interface SandStreak {
   points: THREE.Points;
   positions: Float32Array;
   count: number;
+}
+
+interface CircleCollider {
+  kind: 'circle';
+  x: number;
+  z: number;
+  radius: number;
+}
+
+interface BoxCollider {
+  kind: 'box';
+  x: number;
+  z: number;
+  halfX: number;
+  halfZ: number;
+  rotation: number;
+}
+
+type Collider = CircleCollider | BoxCollider;
+
+const PLAYER_RADIUS = 0.55;
+const NPC_RADIUS = 0.5;
+
+/**
+ * Resolve a moving circle (an actor of radius `pr` at px,pz) against one
+ * collider. Returns the corrected position, or null when there is no overlap.
+ * Circle-vs-circle for props, closest-point circle-vs-oriented-box for walls;
+ * both fully eject the actor so it can never end up inside solid geometry.
+ */
+function resolveCollider(px: number, pz: number, collider: Collider, pr: number): { x: number; z: number } | null {
+  if (collider.kind === 'circle') {
+    const dx = px - collider.x;
+    const dz = pz - collider.z;
+    const minDist = collider.radius + pr;
+    const distSq = dx * dx + dz * dz;
+    if (distSq >= minDist * minDist) return null;
+    const dist = Math.sqrt(distSq);
+    if (dist < 1e-4) {
+      // Concentric: eject along +z so we never divide by zero.
+      return { x: collider.x, z: collider.z + minDist };
+    }
+    const scale = minDist / dist;
+    return { x: collider.x + dx * scale, z: collider.z + dz * scale };
+  }
+
+  // Oriented box: work in the box's local frame.
+  const cos = Math.cos(-collider.rotation);
+  const sin = Math.sin(-collider.rotation);
+  const rx = px - collider.x;
+  const rz = pz - collider.z;
+  let lx = rx * cos - rz * sin;
+  let lz = rx * sin + rz * cos;
+  const clampedX = THREE.MathUtils.clamp(lx, -collider.halfX, collider.halfX);
+  const clampedZ = THREE.MathUtils.clamp(lz, -collider.halfZ, collider.halfZ);
+  const dx = lx - clampedX;
+  const dz = lz - clampedZ;
+  const distSq = dx * dx + dz * dz;
+  if (dx === 0 && dz === 0) {
+    // Actor centre is inside the box: push out along the shallowest axis.
+    const penX = collider.halfX + pr - Math.abs(lx);
+    const penZ = collider.halfZ + pr - Math.abs(lz);
+    if (penX < penZ) lx = Math.sign(lx || 1) * (collider.halfX + pr);
+    else lz = Math.sign(lz || 1) * (collider.halfZ + pr);
+  } else if (distSq < pr * pr) {
+    const dist = Math.sqrt(distSq);
+    const push = pr - dist;
+    lx += (dx / dist) * push;
+    lz += (dz / dist) * push;
+  } else {
+    return null;
+  }
+  const cosBack = Math.cos(collider.rotation);
+  const sinBack = Math.sin(collider.rotation);
+  return {
+    x: collider.x + lx * cosBack - lz * sinBack,
+    z: collider.z + lx * sinBack + lz * cosBack,
+  };
 }
 
 type Phase = 'menu' | 'playing' | 'dialogue' | 'paused' | 'won';
@@ -367,6 +447,7 @@ export class XenowakeGame {
   private dust: THREE.Points | null = null;
   private readonly dustClouds: DustCloud[] = [];
   private sandStreak: SandStreak | null = null;
+  private readonly colliders: Collider[] = [];
   private windAngle = 0.6;
   private windStrength = 1;
   private readonly windDir = new THREE.Vector2(1, 0);
@@ -418,6 +499,8 @@ export class XenowakeGame {
   private prevGroundHeight = 0;
   private landSquash = 0;
   private prevSpeed = 0;
+  private coyoteTimer = 0;
+  private jumpBufferTimer = 0;
   private readonly npcHome = new THREE.Vector3();
   private readonly npcVelocity = new THREE.Vector3();
   private npcHeading = -1.1;
@@ -516,6 +599,24 @@ export class XenowakeGame {
       canvas.addEventListener('webglcontextrestored', this.onContextRestored, false);
       this.frameId = requestAnimationFrame(this.frame);
     }
+  }
+
+  /** Dev-only snapshot for automated verification (positions, ground state). */
+  public get debugState(): {
+    px: number; py: number; pz: number; grounded: boolean; vy: number;
+    nx: number; nz: number; phase: Phase; colliders: number;
+  } {
+    return {
+      px: this.player.position.x,
+      py: this.player.position.y,
+      pz: this.player.position.z,
+      grounded: this.grounded,
+      vy: this.verticalVelocity,
+      nx: this.npc.position.x,
+      nz: this.npc.position.z,
+      phase: this.phase,
+      colliders: this.colliders.length,
+    };
   }
 
   public async start(): Promise<void> {
@@ -625,6 +726,7 @@ export class XenowakeGame {
     this.createDecorativeCrystals();
     this.createCrashSite();
     this.createOutpostAndNpc();
+    this.createHouse();
     this.createBeacons();
     this.createXenites();
     this.createDrones();
@@ -813,7 +915,8 @@ export class XenowakeGame {
       const x = Math.cos(angle) * radius;
       const z = Math.sin(angle) * radius;
       const blocked = BEACON_LAYOUT.some((point) => Math.hypot(point.x - x, point.z - z) < 6);
-      if (blocked || Math.hypot(x, z - 10) < 12) continue;
+      // Keep the spawn valley and the habitat footprint clear of boulders.
+      if (blocked || Math.hypot(x, z - 10) < 12 || Math.hypot(x - 13, z - 2) < 8) continue;
       position.set(x, terrainHeight(x, z) + 0.3, z);
       quaternion.setFromEuler(new THREE.Euler(random() * 0.25, random() * Math.PI * 2, random() * 0.2));
       const size = edgeRock ? 2 + random() * 4.6 : 0.4 + random() * 1.9;
@@ -822,6 +925,10 @@ export class XenowakeGame {
       rocks.setMatrixAt(placed, matrix);
       tint.set(edgeRock ? 0x55211d : random() > 0.5 ? 0x7d3325 : 0x963d29);
       rocks.setColorAt(placed, tint);
+      // Only the sizeable boulders block movement; small rocks stay steppable.
+      if (size > 1.25) {
+        this.colliders.push({ kind: 'circle', x, z, radius: size * 0.62 });
+      }
       placed += 1;
     }
     rocks.instanceMatrix.needsUpdate = true;
@@ -885,6 +992,7 @@ export class XenowakeGame {
       crystal.castShadow = true;
       this.decorCrystals.push(crystal);
       this.scene.add(crystal);
+      this.colliders.push({ kind: 'circle', x: spot.x, z: spot.z, radius: 0.7 });
     }
   }
 
@@ -928,6 +1036,7 @@ export class XenowakeGame {
     this.portal.ring.receiveShadow = true;
     this.scene.add(this.crashSite);
     this.scene.add(this.portal.group);
+    this.colliders.push({ kind: 'circle', x: crashX, z: crashZ, radius: 3.1 });
   }
 
   private createOutpostAndNpc(): void {
@@ -948,6 +1057,7 @@ export class XenowakeGame {
     this.outpostFallback.add(outpostBody, outpostDome);
     this.outpost.add(this.outpostFallback);
     this.scene.add(this.outpost);
+    this.colliders.push({ kind: 'circle', x: outpostX, z: outpostZ, radius: 4.6 });
 
     const npcX = NPC_HOME.x;
     const npcZ = NPC_HOME.z;
@@ -984,6 +1094,94 @@ export class XenowakeGame {
     this.npcMarker.add(markerCore, markerHalo);
     this.npc.add(this.npcMarker);
     this.scene.add(this.npc);
+  }
+
+  /**
+   * A small habitat the player can walk into. Walls are box colliders with a
+   * real doorway gap; the floor slab is buried into the terrain so there are no
+   * seams, and the interior is furnished and lit. Axis-aligned (rotation 0) so
+   * the wall colliders map directly to world space.
+   */
+  private createHouse(): void {
+    const hx = 13;
+    const hz = 2;
+    const baseY = terrainHeight(hx, hz);
+    const H = 3.2; // wall height
+    const group = new THREE.Group();
+    group.position.set(hx, baseY, hz);
+
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x7a6a5c, roughness: 0.72, metalness: 0.3, flatShading: true });
+    const trimMat = new THREE.MeshStandardMaterial({ color: 0x3f3a3d, roughness: 0.5, metalness: 0.6 });
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x2c2622, roughness: 0.9, metalness: 0.1 });
+    const panelMat = new THREE.MeshStandardMaterial({ color: 0x123b40, emissive: 0x1ec7bd, emissiveIntensity: 1.4, roughness: 0.4 });
+    const crateMat = new THREE.MeshStandardMaterial({ color: 0x8a5a34, roughness: 0.85, flatShading: true });
+
+    const addPanel = (
+      w: number,
+      h: number,
+      d: number,
+      lx: number,
+      ly: number,
+      lz: number,
+      mat: THREE.Material,
+    ): void => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      mesh.position.set(lx, ly, lz);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    };
+
+    // Buried floor slab (top flush with the ground at the house centre).
+    addPanel(8.4, 1.0, 7.4, 0, -0.5, 0, floorMat);
+    // Solid walls: back, left, right.
+    addPanel(8.3, H, 0.3, 0, H / 2, -3.5, wallMat);
+    addPanel(0.3, H, 7.3, -4, H / 2, 0, wallMat);
+    addPanel(0.3, H, 7.3, 4, H / 2, 0, wallMat);
+    // Front wall split around a 2.2 m doorway, plus a lintel above it.
+    addPanel(2.9, H, 0.3, -2.55, H / 2, 3.5, wallMat);
+    addPanel(2.9, H, 0.3, 2.55, H / 2, 3.5, wallMat);
+    addPanel(2.2, 0.6, 0.3, 0, 2.9, 3.5, trimMat);
+    // Flat roof.
+    addPanel(8.6, 0.3, 7.6, 0, H + 0.15, 0, wallMat);
+    // Emissive window strips on the side walls for readability.
+    addPanel(0.08, 0.9, 2.4, -3.98, 1.9, -0.6, panelMat);
+    addPanel(0.08, 0.9, 2.4, 3.98, 1.9, 0.6, panelMat);
+
+    // Interior furniture.
+    addPanel(1.4, 0.9, 0.9, 1.6, 0.45, -1.8, trimMat); // table
+    addPanel(0.9, 0.9, 0.9, -2.4, 0.45, -2.0, crateMat); // crate
+    addPanel(0.7, 0.7, 0.7, -2.4, 1.15, -2.0, crateMat); // stacked crate
+    addPanel(2.4, 0.5, 1.3, -2.6, 0.3, 1.6, trimMat); // bunk
+    addPanel(0.7, 1.5, 0.6, 2.6, 0.85, 1.4, panelMat); // console
+
+    // Warm interior lamp so the enclosed space reads.
+    const lamp = new THREE.PointLight(0xffb066, 2.4, 13, 2);
+    lamp.position.set(0, 2.3, 0);
+    group.add(lamp);
+    const lampBulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.16, 8, 6),
+      new THREE.MeshBasicMaterial({ color: 0xffd29a }),
+    );
+    lampBulb.position.set(0, 2.75, 0);
+    group.add(lampBulb);
+
+    this.scene.add(group);
+
+    // Wall colliders (world space; house is axis-aligned).
+    const wall = (x: number, z: number, halfX: number, halfZ: number): void => {
+      this.colliders.push({ kind: 'box', x, z, halfX, halfZ, rotation: 0 });
+    };
+    wall(hx, hz - 3.5, 4.15, 0.2); // back
+    wall(hx - 4, hz, 0.2, 3.65); // left
+    wall(hx + 4, hz, 0.2, 3.65); // right
+    wall(hx - 2.55, hz + 3.5, 1.5, 0.2); // front-left
+    wall(hx + 2.55, hz + 3.5, 1.5, 0.2); // front-right
+    // Furniture colliders.
+    wall(hx + 1.6, hz - 1.8, 0.75, 0.5); // table
+    wall(hx - 2.4, hz - 2.0, 0.5, 0.5); // crates
+    wall(hx - 2.6, hz + 1.6, 1.25, 0.7); // bunk
+    wall(hx + 2.6, hz + 1.4, 0.4, 0.35); // console
   }
 
   private createPlayer(): void {
@@ -1173,6 +1371,8 @@ export class XenowakeGame {
       });
       this.beacons.push({ name: layout.name, group, position, coreMaterial, beamMaterial, haloMaterial, fallback, active: false });
       this.scene.add(group);
+      // Solid tower base — kept under the 5.2 m interaction range so it stays reachable.
+      this.colliders.push({ kind: 'circle', x: layout.x, z: layout.z, radius: 3.4 });
     }
   }
 
@@ -1686,6 +1886,7 @@ export class XenowakeGame {
       this.npc.position.x *= scale;
       this.npc.position.z *= scale;
     }
+    this.resolveActorCollision(this.npc.position, NPC_RADIUS);
     this.npc.position.y = terrainHeight(this.npc.position.x, this.npc.position.z);
 
     const speed = Math.hypot(this.npcVelocity.x, this.npcVelocity.z);
@@ -1813,6 +2014,8 @@ export class XenowakeGame {
     this.prevGroundHeight = this.spawn.y;
     this.landSquash = 0;
     this.prevSpeed = 0;
+    this.coyoteTimer = 0;
+    this.jumpBufferTimer = 0;
     this.npc.position.copy(this.npcHome);
     this.npc.rotation.y = -1.1;
     this.npcHeading = -1.1;
@@ -1860,6 +2063,7 @@ export class XenowakeGame {
       const pulsePressed = this.input.consumePulse();
       const dashPressed = this.input.consumeDash();
       const interactPressed = this.input.consumeInteract();
+      if (this.input.consumeJump()) this.jumpBufferTimer = JUMP_BUFFER;
       if (pulsePressed) this.tryPulse();
       if (dashPressed) this.tryDash();
       if (interactPressed) this.tryInteract();
@@ -1933,6 +2137,29 @@ export class XenowakeGame {
     }
   }
 
+  /**
+   * Push an actor (at target.x/z, radius pr) out of every solid collider.
+   * Two passes so a corner shared by two walls resolves cleanly. Returns true
+   * if any correction was applied (used to bleed off velocity on impact).
+   */
+  private resolveActorCollision(target: THREE.Vector3, pr: number): boolean {
+    let corrected = false;
+    for (let pass = 0; pass < 2; pass += 1) {
+      let touched = false;
+      for (const collider of this.colliders) {
+        const hit = resolveCollider(target.x, target.z, collider, pr);
+        if (hit) {
+          target.x = hit.x;
+          target.z = hit.z;
+          touched = true;
+          corrected = true;
+        }
+      }
+      if (!touched) break;
+    }
+    return corrected;
+  }
+
   private updatePlayer(delta: number): void {
     this.forward.set(-Math.sin(this.cameraYaw), 0, -Math.cos(this.cameraYaw));
     this.right.set(Math.cos(this.cameraYaw), 0, -Math.sin(this.cameraYaw));
@@ -1960,6 +2187,9 @@ export class XenowakeGame {
         this.callbacks.onToast('Badai terlalu pekat. Kembali ke lembah.', 'warning');
       }
     }
+    // Solid collision: eject from walls/props. Velocity is left intact so the
+    // tangential component slides the player smoothly along surfaces.
+    this.resolveActorCollision(this.player.position, PLAYER_RADIUS);
     // Vertical physics: gravity + ground contact, with brief air over crests.
     const groundHeight = terrainHeight(this.player.position.x, this.player.position.z);
     const horizontalSpeed = Math.hypot(this.velocity.x, this.velocity.z);
@@ -1970,12 +2200,25 @@ export class XenowakeGame {
       this.verticalVelocity = Math.min(6.4, horizontalSpeed * 0.3 + (this.dashTimer > 0 ? 2.4 : 0));
       this.grounded = false;
     }
+    // Jump with coyote time (grace after leaving ground) and input buffering
+    // (grace before landing) so it feels responsive, not twitchy.
+    this.coyoteTimer = this.grounded ? COYOTE_TIME : Math.max(0, this.coyoteTimer - delta);
+    this.jumpBufferTimer = Math.max(0, this.jumpBufferTimer - delta);
+    if (this.jumpBufferTimer > 0 && this.coyoteTimer > 0 && this.verticalVelocity <= 0.5) {
+      this.verticalVelocity = JUMP_SPEED + (this.dashTimer > 0 ? 1.6 : 0);
+      this.grounded = false;
+      this.coyoteTimer = 0;
+      this.jumpBufferTimer = 0;
+      this.landSquash = 0;
+      this.audio.play('jump');
+    }
     this.verticalVelocity += GRAVITY * delta;
     const nextY = this.player.position.y + this.verticalVelocity * delta;
     if (nextY <= groundHeight) {
       if (!this.grounded && this.verticalVelocity < -5) {
         this.landSquash = Math.min(1, -this.verticalVelocity / 15);
         this.triggerLandingDust();
+        this.audio.play('land');
       }
       this.player.position.y = groundHeight;
       this.verticalVelocity = 0;
@@ -1995,6 +2238,7 @@ export class XenowakeGame {
       if (this.footstepDistance > (this.dashTimer > 0 ? 0.82 : 1.18)) {
         this.footstepDistance = 0;
         this.triggerFootPuff(Math.sin(this.walkCycle) >= 0 ? 1 : -1);
+        this.audio.play('step');
       }
     } else {
       this.footstepDistance = 0;
@@ -2435,6 +2679,20 @@ export class XenowakeGame {
     const follow = this.phase === 'menu' ? 1.8 : 9;
     this.camera.position.lerp(this.targetCamera, 1 - Math.exp(-follow * Math.max(delta, 0.001)));
     this.cameraLook.set(this.player.position.x, this.player.position.y + 1.65, this.player.position.z);
+    // Keep the camera out of walls: if it lands inside solid geometry, slide it
+    // toward the player until it clears, so we never render from inside a wall.
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      let inside = false;
+      for (const collider of this.colliders) {
+        if (resolveCollider(this.camera.position.x, this.camera.position.z, collider, 0.45)) {
+          inside = true;
+          break;
+        }
+      }
+      if (!inside) break;
+      this.camera.position.x += (this.cameraLook.x - this.camera.position.x) * 0.28;
+      this.camera.position.z += (this.cameraLook.z - this.camera.position.z) * 0.28;
+    }
     this.camera.lookAt(this.cameraLook);
     const targetFov = this.dashTimer > 0 ? 63 : 58 + speedFactor * 1.2;
     this.camera.fov = damp(this.camera.fov, targetFov, 8, delta);

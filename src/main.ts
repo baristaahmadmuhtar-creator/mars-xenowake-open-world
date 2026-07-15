@@ -58,7 +58,7 @@ app.innerHTML = `
           <div><span>02</span><p><strong>Aktifkan 3 menara</strong>Urutan bebas. Setiap sinyal membangunkan penjaga baru.</p></div>
           <div><span>03</span><p><strong>Kembali ke cincin</strong>Portal di lokasi jatuh terbuka setelah jaringan lengkap.</p></div>
         </div>
-        <p class="desktop-controls">WASD bergerak · drag melihat · Space pulse · Shift dash · E interaksi / dialog ARI</p>
+        <p class="desktop-controls">WASD bergerak · drag melihat · Space lompat · Q pulse · Shift dash · E interaksi / dialog ARI</p>
       </div>
     </section>
 
@@ -111,6 +111,10 @@ app.innerHTML = `
           <span class="cooldown-sweep"></span>
           <svg viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="4"/><circle cx="14" cy="14" r="9"/><path d="M14 1v4M14 23v4M1 14h4M23 14h4"/></svg>
           <small>Pulse</small>
+        </button>
+        <button id="jump-button" class="action-button action-button--jump" type="button" aria-label="Lompat" aria-pressed="false">
+          <svg viewBox="0 0 28 28" aria-hidden="true"><path d="M14 4l6 7h-3.6v6.6h-4.8V11H8l6-7Z"/></svg>
+          <small>Lompat</small>
         </button>
       </div>
 
@@ -267,6 +271,10 @@ const game = new XenowakeGame(
   storage.settings.quality,
   storage.settings.muted,
 );
+
+if (import.meta.env.DEV) {
+  (window as unknown as { __game?: XenowakeGame }).__game = game;
+}
 
 if (!game.isSupported) {
   menuScreen.hidden = true;

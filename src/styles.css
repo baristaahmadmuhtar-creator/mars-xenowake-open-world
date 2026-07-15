@@ -875,6 +875,21 @@ a:focus-visible {
   stroke: none;
 }
 
+.action-button--jump {
+  border-color: rgba(255, 197, 138, 0.5);
+  color: rgba(255, 226, 199, 0.95);
+}
+
+.action-button--jump svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+.action-button--jump.is-pressed,
+.action-button--jump:active {
+  background: rgba(255, 176, 102, 0.32);
+}
+
 .action-button small {
   position: absolute;
   right: 0;

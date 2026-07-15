@@ -1,6 +1,6 @@
 type Vec2 = { x: number; y: number };
 
-type ActionName = "pulse" | "dash" | "interact";
+type ActionName = "pulse" | "dash" | "jump" | "interact";
 
 const MOVEMENT_CODES = new Set([
   "KeyW",
@@ -16,6 +16,7 @@ const MOVEMENT_CODES = new Set([
 const GAMEPLAY_CODES = new Set([
   ...MOVEMENT_CODES,
   "Space",
+  "KeyQ",
   "ShiftLeft",
   "ShiftRight",
   "KeyE",
@@ -28,7 +29,7 @@ const TEXT_ENTRY_SELECTOR =
 const SPACE_ACTIVATION_SELECTOR = "button, a[href], [role='button']";
 
 const CAMERA_BLOCKING_SELECTOR =
-  "#joystick-zone, #pulse-button, #dash-button, #interact-button";
+  "#joystick-zone, #pulse-button, #dash-button, #jump-button, #interact-button";
 
 /**
  * Normalizes keyboard, mouse and multi-touch controls into a small polling API.
@@ -70,6 +71,7 @@ export class InputController {
   private pulseQueued = false;
   private dashQueued = false;
   private interactQueued = false;
+  private jumpQueued = false;
   private pausePressed = false;
   private disposed = false;
 
@@ -101,6 +103,12 @@ export class InputController {
   public consumeInteract(): boolean {
     const queued = this.interactQueued;
     this.interactQueued = false;
+    return queued;
+  }
+
+  public consumeJump(): boolean {
+    const queued = this.jumpQueued;
+    this.jumpQueued = false;
     return queued;
   }
 
@@ -138,7 +146,7 @@ export class InputController {
     if (this.joystickZone) gestureSurfaces.add(this.joystickZone);
     if (this.joystickKnob) gestureSurfaces.add(this.joystickKnob);
 
-    for (const selector of ["#pulse-button", "#dash-button", "#interact-button"]) {
+    for (const selector of ["#pulse-button", "#dash-button", "#jump-button", "#interact-button"]) {
       const element = this.findElement<HTMLElement>(selector);
       if (element) gestureSurfaces.add(element);
     }
@@ -191,6 +199,9 @@ export class InputController {
     if (event.repeat) return;
     switch (event.code) {
       case "Space":
+        this.jumpQueued = true;
+        break;
+      case "KeyQ":
         this.pulseQueued = true;
         break;
       case "ShiftLeft":
@@ -255,6 +266,7 @@ export class InputController {
 
     this.bindActionButton(this.findElement<HTMLElement>("#pulse-button"), "pulse");
     this.bindActionButton(this.findElement<HTMLElement>("#dash-button"), "dash");
+    this.bindActionButton(this.findElement<HTMLElement>("#jump-button"), "jump");
     this.bindActionButton(this.findElement<HTMLElement>("#interact-button"), "interact");
 
     this.listen(window, "pointermove", this.onGlobalPointerMove as EventListener, {
@@ -508,6 +520,9 @@ export class InputController {
       case "dash":
         this.dashQueued = true;
         break;
+      case "jump":
+        this.jumpQueued = true;
+        break;
       case "interact":
         this.interactQueued = true;
         break;
@@ -574,6 +589,7 @@ export class InputController {
     this.pulseQueued = false;
     this.dashQueued = false;
     this.interactQueued = false;
+    this.jumpQueued = false;
     this.pausePressed = false;
   }
 

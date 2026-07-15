@@ -1,4 +1,4 @@
-export type AudioCue = 'pickup' | 'pulse' | 'activate' | 'hit' | 'dash' | 'win';
+export type AudioCue = 'pickup' | 'pulse' | 'activate' | 'hit' | 'dash' | 'win' | 'jump' | 'land' | 'step';
 
 type AudioContextConstructor = typeof AudioContext;
 
@@ -178,6 +178,39 @@ export class AudioEngine {
         this.playTone({ frequency: 220, duration: 0.24, volume: 0.12, type: 'sine' });
         this.playTone({ frequency: 330, duration: 0.24, volume: 0.12, delay: 0.11, type: 'sine' });
         this.playTone({ frequency: 495, duration: 0.34, volume: 0.15, delay: 0.22, type: 'triangle' });
+        return;
+
+      case 'jump':
+        this.playTone({
+          frequency: 240,
+          endFrequency: 520,
+          duration: 0.18,
+          volume: 0.12,
+          type: 'triangle',
+        });
+        return;
+
+      case 'land':
+        this.playNoise({
+          duration: 0.14,
+          volume: 0.12,
+          frequency: 520,
+          endFrequency: 90,
+          filterType: 'lowpass',
+          resonance: 1.4,
+        });
+        this.playTone({ frequency: 150, endFrequency: 70, duration: 0.12, volume: 0.08, type: 'sine' });
+        return;
+
+      case 'step':
+        this.playNoise({
+          duration: 0.07,
+          volume: 0.045,
+          frequency: 780,
+          endFrequency: 260,
+          filterType: 'lowpass',
+          resonance: 1.1,
+        });
         return;
 
       case 'hit':
