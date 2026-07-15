@@ -11,6 +11,13 @@ const PULSE_COOLDOWN = 2.35;
 const DASH_COOLDOWN = 2.8;
 const CYAN = 0x46f6e6;
 
+const GRAVITY = -30;
+const NPC_HOME = { x: 3.6, z: 14.2 } as const;
+const NPC_SPEED = 6.1;
+const NPC_STANDOFF = 4.4;
+const NPC_TALK_STANDOFF = 2.9;
+const NPC_FOLLOW_RANGE = 5.2;
+
 const BEACON_LAYOUT = [
   { name: 'Menara Valles', x: -49, z: -37 },
   { name: 'Menara Eos', x: 52, z: -32 },
@@ -394,6 +401,16 @@ export class XenowakeGame {
   private cameraPitch = 0.34;
   private playerHeading = Math.PI;
   private walkCycle = 0;
+  private verticalVelocity = 0;
+  private grounded = true;
+  private prevGroundHeight = 0;
+  private landSquash = 0;
+  private prevSpeed = 0;
+  private readonly npcHome = new THREE.Vector3();
+  private readonly npcVelocity = new THREE.Vector3();
+  private npcHeading = -1.1;
+  private npcWalkCycle = 0;
+  private npcIdleSeed = 0;
   private health = 3;
   private xeniteCount = 0;
   private collectedCount = 0;
@@ -897,9 +914,11 @@ export class XenowakeGame {
     this.outpost.add(this.outpostFallback);
     this.scene.add(this.outpost);
 
-    const npcX = 3.6;
-    const npcZ = 14.2;
-    this.npc.position.set(npcX, terrainHeight(npcX, npcZ), npcZ);
+    const npcX = NPC_HOME.x;
+    const npcZ = NPC_HOME.z;
+    this.npcHome.set(npcX, terrainHeight(npcX, npcZ), npcZ);
+    this.npcIdleSeed = Math.random() * Math.PI * 2;
+    this.npc.position.copy(this.npcHome);
     this.npc.rotation.y = -1.1;
     const suit = new THREE.MeshStandardMaterial({ color: 0x9a633f, roughness: 0.82, flatShading: true });
     const helmet = new THREE.MeshStandardMaterial({ color: 0x9b9482, roughness: 0.52, metalness: 0.25 });
@@ -1373,9 +1392,10 @@ export class XenowakeGame {
       gait: { value: profile === 'npc' ? 0.18 : 0 },
       dash: { value: 0 },
     };
-    const gaitStrength = profile === 'player' ? 0.072 : 0.018;
-    const swayStrength = profile === 'player' ? 0.054 : 0.016;
-    const breathStrength = profile === 'player' ? 0.018 : 0.011;
+    const gaitStrength = profile === 'player' ? 0.072 : 0.05;
+    const swayStrength = profile === 'player' ? 0.054 : 0.04;
+    const breathStrength = profile === 'player' ? 0.018 : 0.013;
+    const twistStrength = profile === 'player' ? 0.16 : 0.13;
 
     root.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
@@ -1400,7 +1420,14 @@ export class XenowakeGame {
               float bodyMask = smoothstep(0.2, 2.9, transformed.y);
               float outerMask = smoothstep(0.18, 0.68, abs(transformed.x));
               float motionMask = clamp(bodyMask * (0.35 + outerMask), 0.0, 1.0);
-              float phase = uXenoTime * (7.2 + uXenoDash * 4.0) + transformed.y * 3.2 + transformed.x * 4.6;
+              float stride = uXenoTime * (6.6 + uXenoDash * 4.0);
+              // Torsional gait: rotate around Y by an angle proportional to height
+              // above a mid pivot, so shoulders and hips counter-rotate each step.
+              float twistAngle = sin(stride) * uXenoGait * ${twistStrength.toFixed(4)} * (transformed.y - 1.25);
+              float tc = cos(twistAngle);
+              float ts = sin(twistAngle);
+              transformed.xz = mat2(tc, -ts, ts, tc) * transformed.xz;
+              float phase = stride + transformed.y * 3.2 + transformed.x * 4.6;
               transformed.x += sin(phase) * uXenoGait * motionMask * ${swayStrength.toFixed(4)};
               transformed.z += cos(phase * 0.83) * uXenoGait * motionMask * ${gaitStrength.toFixed(4)};
               transformed.y += sin(uXenoTime * 2.1 + transformed.x * 1.8) * ${breathStrength.toFixed(4)} * bodyMask;
@@ -1497,6 +1524,95 @@ export class XenowakeGame {
     }
   }
 
+  private triggerLandingDust(): void {
+    const puff = this.footPuffs[this.footPuffCursor];
+    this.triggerFootPuff(1);
+    this.triggerFootPuff(-1);
+    if (puff) {
+      puff.life = 0.6;
+      puff.mesh.scale.setScalar(0.7);
+      puff.mesh.material.opacity = 0.42;
+    }
+  }
+
+  private updateNpc(delta: number, time: number): void {
+    const toPlayerX = this.player.position.x - this.npc.position.x;
+    const toPlayerZ = this.player.position.z - this.npc.position.z;
+    const dist = Math.hypot(toPlayerX, toPlayerZ) || 0.0001;
+    const dirX = toPlayerX / dist;
+    const dirZ = toPlayerZ / dist;
+    const playerSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+
+    // Close the gap for conversation when the player stops nearby.
+    const wantsTalk = playerSpeed < 1.2 && dist < 9;
+    const standoff = wantsTalk ? NPC_TALK_STANDOFF : NPC_STANDOFF;
+
+    let targetSpeed = 0;
+    if (dist > standoff + NPC_FOLLOW_RANGE - NPC_STANDOFF) {
+      const urgency = THREE.MathUtils.clamp((dist - standoff) / 12, 0, 1);
+      targetSpeed = NPC_SPEED * (0.4 + urgency * 0.6);
+    } else if (dist < standoff - 0.8) {
+      targetSpeed = -NPC_SPEED * 0.42; // too close, give the player space
+    }
+
+    this.npcVelocity.x = damp(this.npcVelocity.x, dirX * targetSpeed, 6, delta);
+    this.npcVelocity.z = damp(this.npcVelocity.z, dirZ * targetSpeed, 6, delta);
+    this.npc.position.x += this.npcVelocity.x * delta;
+    this.npc.position.z += this.npcVelocity.z * delta;
+
+    const radius = Math.hypot(this.npc.position.x, this.npc.position.z);
+    if (radius > WORLD_LIMIT - 2) {
+      const scale = (WORLD_LIMIT - 2) / radius;
+      this.npc.position.x *= scale;
+      this.npc.position.z *= scale;
+    }
+    this.npc.position.y = terrainHeight(this.npc.position.x, this.npc.position.z);
+
+    const speed = Math.hypot(this.npcVelocity.x, this.npcVelocity.z);
+    const speedFactor = Math.min(1, speed / NPC_SPEED);
+
+    // Face travel direction while walking, otherwise turn to the player.
+    let targetHeading: number;
+    if (speed > 0.4) {
+      const sign = targetSpeed < 0 ? -1 : 1;
+      targetHeading = Math.atan2(this.npcVelocity.x * sign, this.npcVelocity.z * sign);
+    } else {
+      targetHeading = Math.atan2(toPlayerX, toPlayerZ);
+    }
+    this.npcHeading = angleDamp(this.npcHeading, targetHeading, 6, delta);
+    this.npc.rotation.y = this.npcHeading;
+
+    if (speed > 0.3) this.npcWalkCycle += delta * (7 + speedFactor * 5);
+    if (this.npcMotionUniforms) {
+      this.npcMotionUniforms.time.value = time;
+      this.npcMotionUniforms.gait.value = damp(
+        this.npcMotionUniforms.gait.value,
+        0.12 + speedFactor * 0.9,
+        8,
+        delta,
+      );
+    }
+    if (this.npcVisual) {
+      const bob = speed > 0.3
+        ? Math.abs(Math.sin(this.npcWalkCycle)) * (0.05 + speedFactor * 0.05)
+        : Math.sin(time * 1.7 + this.npcIdleSeed) * 0.016;
+      this.npcVisual.position.y = damp(this.npcVisual.position.y, bob, 12, delta);
+      const sway = speed > 0.3
+        ? Math.sin(this.npcWalkCycle * 0.5) * 0.045
+        : Math.sin(time * 0.6 + this.npcIdleSeed) * 0.02;
+      this.npcVisual.position.x = damp(this.npcVisual.position.x, sway, 9, delta);
+      this.npcVisual.rotation.z = damp(
+        this.npcVisual.rotation.z,
+        speed > 0.3 ? Math.sin(this.npcWalkCycle * 0.5) * 0.05 : Math.sin(time * 0.5 + this.npcIdleSeed) * 0.01,
+        8,
+        delta,
+      );
+      // Idle "look around": gentle scan when standing still.
+      const lookAround = speed < 0.3 ? Math.sin(time * 0.32 + this.npcIdleSeed) * 0.13 : 0;
+      this.npcVisual.rotation.y = damp(this.npcVisual.rotation.y, lookAround, 4, delta);
+    }
+  }
+
   private resetSession(): void {
     this.elapsed = 0;
     this.performanceWarmupSeconds = 0;
@@ -1559,6 +1675,20 @@ export class XenowakeGame {
       puff.age = 999;
       puff.mesh.visible = false;
       puff.mesh.material.opacity = 0;
+    }
+    this.verticalVelocity = 0;
+    this.grounded = true;
+    this.prevGroundHeight = this.spawn.y;
+    this.landSquash = 0;
+    this.prevSpeed = 0;
+    this.npc.position.copy(this.npcHome);
+    this.npc.rotation.y = -1.1;
+    this.npcHeading = -1.1;
+    this.npcVelocity.set(0, 0, 0);
+    this.npcWalkCycle = 0;
+    if (this.npcVisual) {
+      this.npcVisual.position.set(0, 0, 0);
+      this.npcVisual.rotation.set(0, 0, 0);
     }
     if (this.dashTrailMaterial) this.dashTrailMaterial.opacity = 0;
     this.dashTrail.visible = false;
@@ -1658,6 +1788,7 @@ export class XenowakeGame {
       if (this.respawnTimer <= 0) this.finishRespawn();
     } else {
       this.updatePlayer(delta);
+      this.updateNpc(delta, this.elapsed);
       this.collectNearbyXenite();
       this.updateDrones(delta);
       this.updateInteraction(false);
@@ -1697,12 +1828,37 @@ export class XenowakeGame {
         this.callbacks.onToast('Badai terlalu pekat. Kembali ke lembah.', 'warning');
       }
     }
-    this.player.position.y = terrainHeight(this.player.position.x, this.player.position.z);
+    // Vertical physics: gravity + ground contact, with brief air over crests.
+    const groundHeight = terrainHeight(this.player.position.x, this.player.position.z);
+    const horizontalSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+    const slope = groundHeight - this.prevGroundHeight;
+    this.prevGroundHeight = groundHeight;
+    if (this.grounded && slope < -0.05 && horizontalSpeed > 7) {
+      // running/dashing off a downhill crest launches a little hop.
+      this.verticalVelocity = Math.min(6.4, horizontalSpeed * 0.3 + (this.dashTimer > 0 ? 2.4 : 0));
+      this.grounded = false;
+    }
+    this.verticalVelocity += GRAVITY * delta;
+    const nextY = this.player.position.y + this.verticalVelocity * delta;
+    if (nextY <= groundHeight) {
+      if (!this.grounded && this.verticalVelocity < -5) {
+        this.landSquash = Math.min(1, -this.verticalVelocity / 15);
+        this.triggerLandingDust();
+      }
+      this.player.position.y = groundHeight;
+      this.verticalVelocity = 0;
+      this.grounded = true;
+    } else {
+      this.player.position.y = nextY;
+      this.grounded = false;
+    }
+    this.landSquash = Math.max(0, this.landSquash - delta * 3.6);
+
     const movedDistance = Math.hypot(
       this.player.position.x - this.lastStepPosition.x,
       this.player.position.z - this.lastStepPosition.z,
     );
-    if (moving) {
+    if (moving && this.grounded) {
       this.footstepDistance += movedDistance;
       if (this.footstepDistance > (this.dashTimer > 0 ? 0.82 : 1.18)) {
         this.footstepDistance = 0;
@@ -1725,23 +1881,47 @@ export class XenowakeGame {
       this.playerLimbs[index].rotation.x = damp(this.playerLimbs[index].rotation.x, stride * direction, 12, delta);
     }
     if (this.playerVisual) {
-      const speedFactor = Math.min(1, Math.hypot(this.velocity.x, this.velocity.z) / 7.5);
-      const bob = moving ? Math.abs(Math.sin(this.walkCycle)) * (0.08 + speedFactor * 0.055) : Math.sin(this.elapsed * 1.8) * 0.02;
-      const breath = Math.sin(this.elapsed * 2.1) * 0.008;
-      this.playerVisual.position.y = damp(this.playerVisual.position.y, bob, 13, delta);
+      const speedFactor = Math.min(1, horizontalSpeed / 7.5);
+      const accel = (horizontalSpeed - this.prevSpeed) / Math.max(delta, 0.001);
+      this.prevSpeed = horizontalSpeed;
+      const airborne = !this.grounded;
+      const walking = moving && !airborne;
+      // Vertical bob with a heel-strike double-bounce; airborne body stays still.
+      const bob = airborne
+        ? 0.04
+        : walking
+          ? Math.abs(Math.sin(this.walkCycle)) * (0.08 + speedFactor * 0.06) + Math.sin(this.walkCycle * 2) * 0.02
+          : Math.sin(this.elapsed * 1.8) * 0.02;
+      this.playerVisual.position.y = damp(this.playerVisual.position.y, bob, 14, delta);
+      // Lateral hip sway, one shift per stride.
+      const sway = walking ? Math.sin(this.walkCycle * 0.5) * (0.05 + speedFactor * 0.05) : 0;
+      this.playerVisual.position.x = damp(this.playerVisual.position.x, sway, 10, delta);
+      // Whole-body yaw twist per step (counter to the swinging limbs).
+      this.playerVisual.rotation.y = damp(
+        this.playerVisual.rotation.y,
+        walking ? Math.sin(this.walkCycle * 0.5) * 0.07 : 0,
+        9,
+        delta,
+      );
+      // Bank into turns.
       this.playerVisual.rotation.z = damp(
         this.playerVisual.rotation.z,
-        moving ? -this.input.move.x * (0.08 + speedFactor * 0.04) : 0,
+        moving ? -this.input.move.x * (0.09 + speedFactor * 0.05) : 0,
         10,
         delta,
       );
-      this.playerVisual.rotation.x = damp(
-        this.playerVisual.rotation.x,
-        this.dashTimer > 0 ? 0.22 : speedFactor * 0.035,
-        12,
-        delta,
-      );
-      this.playerVisual.scale.set(0.96 * (1 - breath), 0.96 * (1 + breath), 0.96 * (1 - breath));
+      // Pitch: tuck in air, lean into dash, lean from acceleration.
+      const targetPitch = airborne
+        ? 0.18
+        : this.dashTimer > 0
+          ? 0.24
+          : THREE.MathUtils.clamp(accel * 0.012, -0.06, 0.12) + speedFactor * 0.03;
+      this.playerVisual.rotation.x = damp(this.playerVisual.rotation.x, targetPitch, 11, delta);
+      // Breath + landing squash-and-stretch.
+      const breath = Math.sin(this.elapsed * 2.1) * 0.008;
+      const squashY = 1 - this.landSquash * 0.26 - breath;
+      const squashXZ = 1 + this.landSquash * 0.18 + breath * 0.5;
+      this.playerVisual.scale.set(0.96 * squashXZ, 0.96 * squashY, 0.96 * squashXZ);
     }
     if (this.playerMotionUniforms) {
       this.playerMotionUniforms.gait.value = damp(
@@ -2050,19 +2230,7 @@ export class XenowakeGame {
 
   private updateAmbient(delta: number, time: number): void {
     if (this.playerMotionUniforms) this.playerMotionUniforms.time.value = time;
-    if (this.npcMotionUniforms) {
-      this.npcMotionUniforms.time.value = time;
-      this.npcMotionUniforms.gait.value = 0.18 + Math.sin(time * 0.8) * 0.04;
-    }
-    const npcDx = this.player.position.x - this.npc.position.x;
-    const npcDz = this.player.position.z - this.npc.position.z;
-    if (npcDx * npcDx + npcDz * npcDz < 11 * 11) {
-      this.npc.rotation.y = angleDamp(this.npc.rotation.y, Math.atan2(npcDx, npcDz), 3.8, delta);
-    }
-    if (this.npcVisual) {
-      this.npcVisual.position.y = Math.sin(time * 1.7) * 0.018;
-      this.npcVisual.rotation.z = Math.sin(time * 0.72) * 0.008;
-    }
+    // ARI's locomotion, gait and idle behaviour live in updateNpc.
     this.npcMarker.rotation.y += delta * 1.35;
     this.npcMarker.position.y = 3.55 + Math.sin(time * 2.5) * 0.12;
     this.npcMarker.scale.setScalar(0.94 + Math.sin(time * 3.1) * 0.08);
