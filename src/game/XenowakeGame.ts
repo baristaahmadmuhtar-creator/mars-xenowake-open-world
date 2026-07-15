@@ -158,6 +158,13 @@ interface DetailMotionUniforms {
   time: { value: number };
   gait: { value: number };
   dash: { value: number };
+  wind: { value: number };
+}
+
+interface SandStreak {
+  points: THREE.Points;
+  positions: Float32Array;
+  count: number;
 }
 
 type Phase = 'menu' | 'playing' | 'dialogue' | 'paused' | 'won';
@@ -359,6 +366,11 @@ export class XenowakeGame {
   private readonly outpostFallback = new THREE.Group();
   private dust: THREE.Points | null = null;
   private readonly dustClouds: DustCloud[] = [];
+  private sandStreak: SandStreak | null = null;
+  private windAngle = 0.6;
+  private windStrength = 1;
+  private readonly windDir = new THREE.Vector2(1, 0);
+  private readonly decorCrystals: THREE.Mesh[] = [];
   private readonly footPuffs: FootPuff[] = [];
   private footPuffCursor = 0;
   private footstepDistance = 0;
@@ -619,6 +631,7 @@ export class XenowakeGame {
     this.createPlayer();
     this.createDust();
     this.createDustClouds();
+    this.createSandStreak();
     this.scene.add(this.pulseRing);
   }
 
@@ -851,6 +864,28 @@ export class XenowakeGame {
     }
     mesh.instanceMatrix.needsUpdate = true;
     this.scene.add(mesh);
+
+    // A few tall hero crystals near the valley that visibly bend in the wind.
+    const heroGeometry = new THREE.OctahedronGeometry(0.5, 0);
+    heroGeometry.scale(0.66, 3.4, 0.66);
+    heroGeometry.translate(0, 1.7, 0); // pivot at the base so sway hinges from the ground
+    const heroSpots = [
+      { x: -6, z: 22 },
+      { x: 9, z: 26 },
+      { x: -18, z: 8 },
+      { x: 22, z: 2 },
+      { x: 2, z: -12 },
+      { x: -24, z: -6 },
+    ];
+    for (const spot of heroSpots) {
+      const crystal = new THREE.Mesh(heroGeometry, material.clone());
+      crystal.position.set(spot.x, terrainHeight(spot.x, spot.z), spot.z);
+      crystal.rotation.y = random() * Math.PI;
+      crystal.scale.setScalar(0.8 + random() * 0.7);
+      crystal.castShadow = true;
+      this.decorCrystals.push(crystal);
+      this.scene.add(crystal);
+    }
   }
 
   private createCrashSite(): void {
@@ -1391,11 +1426,15 @@ export class XenowakeGame {
       time: { value: 0 },
       gait: { value: profile === 'npc' ? 0.18 : 0 },
       dash: { value: 0 },
+      wind: { value: 0 },
     };
-    const gaitStrength = profile === 'player' ? 0.072 : 0.05;
-    const swayStrength = profile === 'player' ? 0.054 : 0.04;
+    const swayStrength = profile === 'player' ? 0.05 : 0.038;
     const breathStrength = profile === 'player' ? 0.018 : 0.013;
-    const twistStrength = profile === 'player' ? 0.16 : 0.13;
+    const twistStrength = profile === 'player' ? 0.15 : 0.12;
+    const legStrength = profile === 'player' ? 0.16 : 0.13;
+    const armStrength = profile === 'player' ? 0.13 : 0.1;
+    const liftStrength = profile === 'player' ? 0.075 : 0.06;
+    const windStrength = profile === 'player' ? 0.03 : 0.026;
 
     root.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
@@ -1406,32 +1445,47 @@ export class XenowakeGame {
           shader.uniforms.uXenoTime = uniforms.time;
           shader.uniforms.uXenoGait = uniforms.gait;
           shader.uniforms.uXenoDash = uniforms.dash;
+          shader.uniforms.uXenoWind = uniforms.wind;
           shader.vertexShader = shader.vertexShader
             .replace(
               '#include <common>',
               `#include <common>
               uniform float uXenoTime;
               uniform float uXenoGait;
-              uniform float uXenoDash;`,
+              uniform float uXenoDash;
+              uniform float uXenoWind;`,
             )
             .replace(
               '#include <begin_vertex>',
               `#include <begin_vertex>
               float bodyMask = smoothstep(0.2, 2.9, transformed.y);
-              float outerMask = smoothstep(0.18, 0.68, abs(transformed.x));
-              float motionMask = clamp(bodyMask * (0.35 + outerMask), 0.0, 1.0);
+              float upperMask = smoothstep(1.0, 2.3, transformed.y);
+              float lowerMask = smoothstep(1.05, 0.05, transformed.y);
+              float crestMask = smoothstep(2.3, 3.15, transformed.y);
+              float side = sign(transformed.x);
+              float armMask = upperMask * smoothstep(0.26, 0.5, abs(transformed.x));
               float stride = uXenoTime * (6.6 + uXenoDash * 4.0);
-              // Torsional gait: rotate around Y by an angle proportional to height
-              // above a mid pivot, so shoulders and hips counter-rotate each step.
-              float twistAngle = sin(stride) * uXenoGait * ${twistStrength.toFixed(4)} * (transformed.y - 1.25);
+              float swingA = sin(stride);
+              float swingB = cos(stride);
+              // Torsional gait: shoulders and hips counter-rotate around a mid pivot.
+              float twistAngle = swingA * uXenoGait * ${twistStrength.toFixed(4)} * (transformed.y - 1.2);
               float tc = cos(twistAngle);
               float ts = sin(twistAngle);
               transformed.xz = mat2(tc, -ts, ts, tc) * transformed.xz;
-              float phase = stride + transformed.y * 3.2 + transformed.x * 4.6;
-              transformed.x += sin(phase) * uXenoGait * motionMask * ${swayStrength.toFixed(4)};
-              transformed.z += cos(phase * 0.83) * uXenoGait * motionMask * ${gaitStrength.toFixed(4)};
+              // Legs stride fore/back per side; arms swing opposite to the legs.
+              float legSwing = swingA * uXenoGait;
+              transformed.z += legSwing * side * lowerMask * ${legStrength.toFixed(4)};
+              transformed.z += -legSwing * side * armMask * ${armStrength.toFixed(4)};
+              // Trailing foot lifts off the ground at the back of the stride.
+              transformed.y += max(0.0, -swingB * side) * lowerMask * uXenoGait * ${liftStrength.toFixed(4)};
+              // Sub-body sway + breathing.
+              transformed.x += swingA * uXenoGait * bodyMask * ${swayStrength.toFixed(4)};
               transformed.y += sin(uXenoTime * 2.1 + transformed.x * 1.8) * ${breathStrength.toFixed(4)} * bodyMask;
-              transformed.z += uXenoDash * bodyMask * 0.045;`,
+              // Wind: whole-body lean plus a faster flutter on the head crest.
+              transformed.x += uXenoWind * bodyMask * (0.5 + upperMask) * ${windStrength.toFixed(4)};
+              transformed.x += sin(uXenoTime * 9.0 + transformed.z * 3.0) * abs(uXenoWind) * crestMask * 0.05;
+              // Dash forward tuck.
+              transformed.z += uXenoDash * bodyMask * 0.05;`,
             );
         };
         material.needsUpdate = true;
@@ -1486,6 +1540,72 @@ export class XenowakeGame {
       sprite.scale.set(scale * (1.4 + random() * 1.8), scale * (0.35 + random() * 0.34), 1);
       this.dustClouds.push({ sprite, speed: 0.45 + random() * 0.9, drift: random() * Math.PI * 2 });
       this.scene.add(sprite);
+    }
+  }
+
+  private createSandStreak(): void {
+    const random = mulberry32(51987);
+    const count = this.quality === 'high' ? 320 : 180;
+    const positions = new Float32Array(count * 3);
+    for (let index = 0; index < count; index += 1) {
+      const x = (random() - 0.5) * 190;
+      const z = (random() - 0.5) * 190;
+      positions[index * 3] = x;
+      positions[index * 3 + 1] = terrainHeight(x, z) + 0.15 + random() * 1.6;
+      positions[index * 3 + 2] = z;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const material = new THREE.PointsMaterial({
+      map: createSoftDustTexture(),
+      color: 0xe1904f,
+      size: 0.5,
+      transparent: true,
+      opacity: 0.32,
+      depthWrite: false,
+      sizeAttenuation: true,
+      blending: THREE.AdditiveBlending,
+    });
+    const points = new THREE.Points(geometry, material);
+    points.frustumCulled = false;
+    this.sandStreak = { points, positions, count };
+    this.scene.add(points);
+  }
+
+  private updateWind(delta: number, time: number): void {
+    // Slowly wandering wind heading with layered gusts.
+    this.windAngle += delta * 0.045;
+    const gust = 0.5 + 0.35 * Math.sin(time * 0.23) + 0.28 * Math.sin(time * 0.07 + 1.3);
+    this.windStrength = 0.55 + Math.max(0, gust) * 1.15;
+    this.windDir.set(Math.cos(this.windAngle), Math.sin(this.windAngle));
+
+    if (this.sandStreak) {
+      const { positions, count } = this.sandStreak;
+      const vx = this.windDir.x * this.windStrength * 9 * delta;
+      const vz = this.windDir.y * this.windStrength * 9 * delta;
+      for (let index = 0; index < count; index += 1) {
+        const base = index * 3;
+        let x = positions[base] + vx;
+        let z = positions[base + 2] + vz;
+        // Recycle grains that blow past the far edge back to the upwind side.
+        if (x > 95) x -= 190;
+        else if (x < -95) x += 190;
+        if (z > 95) z -= 190;
+        else if (z < -95) z += 190;
+        positions[base] = x;
+        positions[base + 2] = z;
+        positions[base + 1] = terrainHeight(x, z) + 0.15 + ((index * 37) % 16) * 0.1;
+      }
+      const attribute = this.sandStreak.points.geometry.getAttribute('position') as THREE.BufferAttribute;
+      attribute.needsUpdate = true;
+      const streakMaterial = this.sandStreak.points.material as THREE.PointsMaterial;
+      streakMaterial.opacity = 0.2 + this.windStrength * 0.12;
+    }
+
+    for (const crystal of this.decorCrystals) {
+      const sway = this.windStrength * 0.09;
+      crystal.rotation.z = this.windDir.x * sway + Math.sin(time * 2.4 + crystal.position.x) * 0.02;
+      crystal.rotation.x = -this.windDir.y * sway + Math.cos(time * 2.1 + crystal.position.z) * 0.02;
     }
   }
 
@@ -1601,9 +1721,21 @@ export class XenowakeGame {
         ? Math.sin(this.npcWalkCycle * 0.5) * 0.045
         : Math.sin(time * 0.6 + this.npcIdleSeed) * 0.02;
       this.npcVisual.position.x = damp(this.npcVisual.position.x, sway, 9, delta);
+      // Conform ARI to the ground slope she stands on.
+      const e = 0.7;
+      const nx = this.npc.position.x;
+      const nz = this.npc.position.z;
+      const gx = (terrainHeight(nx + e, nz) - terrainHeight(nx - e, nz)) / (2 * e);
+      const gz = (terrainHeight(nx, nz + e) - terrainHeight(nx, nz - e)) / (2 * e);
+      const sinH = Math.sin(this.npcHeading);
+      const cosH = Math.cos(this.npcHeading);
+      const slopeFwd = THREE.MathUtils.clamp(gx * sinH + gz * cosH, -1, 1);
+      const slopeRight = THREE.MathUtils.clamp(gx * cosH - gz * sinH, -1, 1);
+      this.npcVisual.rotation.x = damp(this.npcVisual.rotation.x, -slopeFwd * 0.3, 7, delta);
       this.npcVisual.rotation.z = damp(
         this.npcVisual.rotation.z,
-        speed > 0.3 ? Math.sin(this.npcWalkCycle * 0.5) * 0.05 : Math.sin(time * 0.5 + this.npcIdleSeed) * 0.01,
+        (speed > 0.3 ? Math.sin(this.npcWalkCycle * 0.5) * 0.05 : Math.sin(time * 0.5 + this.npcIdleSeed) * 0.01)
+          + slopeRight * 0.3,
         8,
         delta,
       );
@@ -1903,19 +2035,32 @@ export class XenowakeGame {
         9,
         delta,
       );
-      // Bank into turns.
+      // Conform the body to the ground slope (sampled terrain gradient),
+      // projected into the player's local frame so hills tilt it precisely.
+      const e = 0.7;
+      const px = this.player.position.x;
+      const pz = this.player.position.z;
+      const gx = (terrainHeight(px + e, pz) - terrainHeight(px - e, pz)) / (2 * e);
+      const gz = (terrainHeight(px, pz + e) - terrainHeight(px, pz - e)) / (2 * e);
+      const sinH = Math.sin(this.playerHeading);
+      const cosH = Math.cos(this.playerHeading);
+      const slopeFwd = THREE.MathUtils.clamp(gx * sinH + gz * cosH, -1, 1);
+      const slopeRight = THREE.MathUtils.clamp(gx * cosH - gz * sinH, -1, 1);
+      const slopeBlend = airborne ? 0 : 1;
+      // Bank into turns + roll with the cross-slope.
       this.playerVisual.rotation.z = damp(
         this.playerVisual.rotation.z,
-        moving ? -this.input.move.x * (0.09 + speedFactor * 0.05) : 0,
+        (moving ? -this.input.move.x * (0.09 + speedFactor * 0.05) : 0) + slopeRight * 0.34 * slopeBlend,
         10,
         delta,
       );
-      // Pitch: tuck in air, lean into dash, lean from acceleration.
+      // Pitch: tuck in air, lean into dash/acceleration, lean back going uphill.
       const targetPitch = airborne
         ? 0.18
-        : this.dashTimer > 0
-          ? 0.24
-          : THREE.MathUtils.clamp(accel * 0.012, -0.06, 0.12) + speedFactor * 0.03;
+        : (this.dashTimer > 0
+            ? 0.24
+            : THREE.MathUtils.clamp(accel * 0.012, -0.06, 0.12) + speedFactor * 0.03)
+          - slopeFwd * 0.34;
       this.playerVisual.rotation.x = damp(this.playerVisual.rotation.x, targetPitch, 11, delta);
       // Breath + landing squash-and-stretch.
       const breath = Math.sin(this.elapsed * 2.1) * 0.008;
@@ -2229,7 +2374,14 @@ export class XenowakeGame {
   }
 
   private updateAmbient(delta: number, time: number): void {
-    if (this.playerMotionUniforms) this.playerMotionUniforms.time.value = time;
+    this.updateWind(delta, time);
+    // Wind pushes the characters' crest/lean via the shared motion shader.
+    const windSignal = this.windDir.x * this.windStrength;
+    if (this.playerMotionUniforms) {
+      this.playerMotionUniforms.time.value = time;
+      this.playerMotionUniforms.wind.value = windSignal;
+    }
+    if (this.npcMotionUniforms) this.npcMotionUniforms.wind.value = windSignal;
     // ARI's locomotion, gait and idle behaviour live in updateNpc.
     this.npcMarker.rotation.y += delta * 1.35;
     this.npcMarker.position.y = 3.55 + Math.sin(time * 2.5) * 0.12;
@@ -2254,10 +2406,13 @@ export class XenowakeGame {
       this.portal.discMaterial.opacity = 0.34 + Math.sin(time * 2.1) * 0.08;
     }
     if (this.dust) this.dust.rotation.y += delta * 0.006;
+    const cloudVX = this.windDir.x * this.windStrength;
+    const cloudVZ = this.windDir.y * this.windStrength;
     for (let index = 0; index < this.dustClouds.length; index += 1) {
       const cloud = this.dustClouds[index];
-      cloud.sprite.position.x += Math.cos(cloud.drift) * cloud.speed * delta;
-      cloud.sprite.position.z += Math.sin(cloud.drift) * cloud.speed * delta;
+      // Clouds ride the wind, each at its own responsiveness.
+      cloud.sprite.position.x += cloudVX * cloud.speed * delta;
+      cloud.sprite.position.z += cloudVZ * cloud.speed * delta;
       cloud.sprite.position.y += Math.sin(time * 0.32 + index) * 0.003;
       if (Math.hypot(cloud.sprite.position.x, cloud.sprite.position.z) > 96) {
         cloud.sprite.position.x *= -0.84;
